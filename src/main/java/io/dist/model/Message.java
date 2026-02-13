@@ -22,6 +22,7 @@ public class Message extends PanacheEntityBase {
     public String payload;
     public String routingKey;
     public String exchange;
+    public String queueName;
     public LocalDateTime timestamp;
     public int deliveryCount;
 
@@ -33,11 +34,12 @@ public class Message extends PanacheEntityBase {
 
     public Message() {}
 
-    public Message(String payload, String routingKey, String exchange) {
+    public Message(String payload, String routingKey, String exchange, String queueName) {
         this.id = UUID.randomUUID().toString();
         this.payload = payload;
         this.routingKey = routingKey;
         this.exchange = exchange;
+        this.queueName = queueName;
         this.timestamp = LocalDateTime.now();
         this.deliveryCount = 0;
     }

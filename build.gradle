@@ -14,6 +14,7 @@ dependencies {
     implementation 'io.quarkus:quarkus-rest'
     implementation 'io.quarkus:quarkus-hibernate-orm-panache'
     implementation 'org.xerial:sqlite-jdbc:3.45.1.0'
+    implementation 'org.hibernate.orm:hibernate-community-dialects:6.4.4.Final'
     testImplementation 'io.quarkus:quarkus-junit'
     testImplementation 'io.rest-assured:rest-assured'
 }

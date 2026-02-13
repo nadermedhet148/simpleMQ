@@ -14,7 +14,7 @@ public class RoutingTest {
     @Test
     void testDirectRouting() {
         DirectRoutingStrategy strategy = new DirectRoutingStrategy();
-        Message msg = new Message("hello", "key1", "ex1");
+        Message msg = new Message("hello", "key1", "ex1", "q1");
         Binding b1 = new Binding("ex1", "q1", "key1");
         Binding b2 = new Binding("ex1", "q2", "key2");
 
@@ -25,7 +25,7 @@ public class RoutingTest {
     @Test
     void testFanoutRouting() {
         FanoutRoutingStrategy strategy = new FanoutRoutingStrategy();
-        Message msg = new Message("hello", "any-key", "ex1");
+        Message msg = new Message("hello", "any-key", "ex1", "q1");
         Binding b1 = new Binding("ex1", "q1", "key1");
         Binding b2 = new Binding("ex1", "q2", "key2");
 

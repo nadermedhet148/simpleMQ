@@ -30,9 +30,9 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 - [x] **Data Schema Design**: Design the SQLite schema for persisting metadata (exchanges, queues) and message payloads.
 
 ### 2. Storage & Persistence Layer
-- [ ] **In-Memory Buffer Implementation**: Design a high-performance in-memory queueing system.
-- [ ] **SQLite Integration**: Configure Quarkus with SQLite for disk persistence.
-- [ ] **Persistence Manager**: Create a service that synchronizes in-memory state with the disk and handles recovery on startup.
+- [x] **In-Memory Buffer Implementation**: Design a high-performance in-memory queueing system.
+- [x] **SQLite Integration**: Configure Quarkus with SQLite for disk persistence.
+- [x] **Persistence Manager**: Create a service that synchronizes in-memory state with the disk and handles recovery on startup.
 
 ### 3. Messaging Engine
 - [ ] **Exchange Routing Engine**: Implement logic to route messages from exchanges to bound queues based on type.
