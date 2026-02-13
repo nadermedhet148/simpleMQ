@@ -25,9 +25,9 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 ## Development Roadmap & Tasks
 
 ### 1. Architecture & Domain Modeling
-- [ ] **Define Core Domain Entities**: Model the `Message`, `Exchange`, `Queue`, and `Binding` objects.
-- [ ] **Define Exchange Routing Logic**: Plan the interface for Direct and Fanout routing strategies.
-- [ ] **Data Schema Design**: Design the SQLite schema for persisting metadata (exchanges, queues) and message payloads.
+- [x] **Define Core Domain Entities**: Model the `Message`, `Exchange`, `Queue`, and `Binding` objects.
+- [x] **Define Exchange Routing Logic**: Plan the interface for Direct and Fanout routing strategies.
+- [x] **Data Schema Design**: Design the SQLite schema for persisting metadata (exchanges, queues) and message payloads.
 
 ### 2. Storage & Persistence Layer
 - [ ] **In-Memory Buffer Implementation**: Design a high-performance in-memory queueing system.
