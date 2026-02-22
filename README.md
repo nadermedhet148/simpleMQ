@@ -35,9 +35,9 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 - [x] **Persistence Manager**: Create a service that synchronizes in-memory state with the disk and handles recovery on startup.
 
 ### 3. Messaging Engine
-- [ ] **Exchange Routing Engine**: Implement logic to route messages from exchanges to bound queues based on type.
-- [ ] **Queue Management Service**: Logic for group-based queue assignment and message ordering.
-- [ ] **Ack/Nack & DLQ Workflow**: Implement the message lifecycle state machine (Pending -> Delivered -> Acked/DLQ).
+- [x] **Exchange Routing Engine**: Implement logic to route messages from exchanges to bound queues based on type.
+- [x] **Queue Management Service**: Logic for group-based queue assignment and message ordering.
+- [x] **Ack/Nack & DLQ Workflow**: Implement the message lifecycle state machine (Pending -> Delivered -> Acked/DLQ).
 
 ### 4. API & Integration
 - [ ] **Broker Management API**: REST endpoints for CRUD operations on Exchanges and Queues.

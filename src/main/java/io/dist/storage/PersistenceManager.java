@@ -24,9 +24,12 @@ public class PersistenceManager {
     @Transactional
     public void recoverMessages() {
         try {
-            List<Message> messages = Message.listAll();
+            List<Message> messages = Message.list("status != ?1 and status != ?2", io.dist.model.MessageStatus.ACKED, io.dist.model.MessageStatus.DLQ);
             LOG.info("Found " + messages.size() + " messages in database for recovery.");
             for (Message message : messages) {
+                if (message.status == io.dist.model.MessageStatus.DELIVERED) {
+                    message.status = io.dist.model.MessageStatus.PENDING;
+                }
                 storageService.getBuffer(message.queueName).enqueue(message);
             }
         } catch (Exception e) {

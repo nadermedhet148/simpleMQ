@@ -25,6 +25,7 @@ public class Message extends PanacheEntityBase {
     public String queueName;
     public LocalDateTime timestamp;
     public int deliveryCount;
+    public MessageStatus status;
 
     @ElementCollection
     @CollectionTable(name = "message_headers", joinColumns = @JoinColumn(name = "message_id"))
@@ -42,5 +43,6 @@ public class Message extends PanacheEntityBase {
         this.queueName = queueName;
         this.timestamp = LocalDateTime.now();
         this.deliveryCount = 0;
+        this.status = MessageStatus.PENDING;
     }
 }
