@@ -71,4 +71,10 @@ public class ManagementResource {
         queueService.unbind(binding.exchangeName, binding.queueName, binding.routingKey);
         return Response.noContent().build();
     }
+
+    @GET
+    @Path("/bindings")
+    public List<Binding> listBindings() {
+        return queueService.listBindings();
+    }
 }

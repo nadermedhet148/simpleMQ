@@ -61,4 +61,8 @@ public class QueueService {
     public List<Exchange> listExchanges() {
         return Exchange.listAll();
     }
+
+    public List<Binding> listBindings() {
+        return Binding.listAll();
+    }
 }

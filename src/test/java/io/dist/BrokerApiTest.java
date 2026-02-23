@@ -99,5 +99,11 @@ public class BrokerApiTest {
             .then()
             .statusCode(200)
             .body("$.size()", greaterThanOrEqualTo(0));
+
+        given()
+            .when().get("/api/management/bindings")
+            .then()
+            .statusCode(200)
+            .body("$.size()", greaterThanOrEqualTo(0));
     }
 }

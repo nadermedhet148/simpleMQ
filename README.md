@@ -40,9 +40,9 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 - [x] **Ack/Nack & DLQ Workflow**: Implement the message lifecycle state machine (Pending -> Delivered -> Acked/DLQ).
 
 ### 4. API & Integration
-- [ ] **Broker Management API**: REST endpoints for CRUD operations on Exchanges and Queues.
-- [ ] **Publishing API**: REST endpoint for producers to inject messages into the broker.
-- [ ] **Polling API**: REST endpoint for consumers to pull and acknowledge messages.
+- [x] **Broker Management API**: REST endpoints for CRUD operations on Exchanges and Queues.
+- [x] **Publishing API**: REST endpoint for producers to inject messages into the broker.
+- [x] **Polling API**: REST endpoint for consumers to pull and acknowledge messages.
 
 ### 5. Clustering & High Availability
 - [ ] **Raft Algorithm Integration**: Implement or integrate a Raft library for leader election and log replication.
