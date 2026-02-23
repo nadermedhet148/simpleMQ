@@ -39,8 +39,10 @@ public class QueueService {
 
     @Transactional
     public void bind(String exchangeName, String queueName, String routingKey) {
-        Binding binding = new Binding(exchangeName, queueName, routingKey);
-        binding.persist();
+        if (Binding.find("exchangeName = ?1 and queueName = ?2 and routingKey = ?3", exchangeName, queueName, routingKey).count() == 0) {
+            Binding binding = new Binding(exchangeName, queueName, routingKey);
+            binding.persist();
+        }
     }
 
     @Transactional

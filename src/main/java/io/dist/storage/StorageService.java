@@ -15,4 +15,8 @@ public class StorageService {
     public void deleteBuffer(String queueName) {
         buffers.remove(queueName);
     }
+
+    public void clear() {
+        buffers.clear();
+    }
 }
