@@ -35,6 +35,19 @@ nb-configuration.xml
 # Local environment
 .env
 
+# simpleMQ Database
+simplemq.db
+simplemq.db-journal
+simplemq.db-shm
+simplemq.db-wal
+
+# Raft Data
+raft-data/
+raft-data-*/
+
+# Test logs/output
+test_output.txt
+
 # Plugin directory
 /.quarkus/cli/plugins/
 # TLS Certificates

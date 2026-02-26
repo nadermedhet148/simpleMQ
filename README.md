@@ -45,9 +45,28 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 - [x] **Polling API**: REST endpoint for consumers to pull and acknowledge messages.
 
 ### 5. Clustering & High Availability
-- [ ] **Raft Algorithm Integration**: Implement or integrate a Raft library for leader election and log replication.
+- [x] **Raft Algorithm Integration**: Implement or integrate a Raft library for leader election and log replication.
 - [ ] **Quorum-based Replication**: Ensure messages are replicated to a majority of nodes before being considered "persisted".
 - [ ] **Cluster Membership Management**: Logic for nodes to join/leave the cluster and discover the leader.
+
+## Running the Cluster
+
+To start a 3-node simpleMQ cluster, use Docker Compose:
+
+```bash
+./gradlew build
+docker-compose up --build
+```
+
+Nodes will be available at:
+- Node 1: http://localhost:8081
+- Node 2: http://localhost:8082
+- Node 3: http://localhost:8083
+
+Check the logs to see the leader election:
+```bash
+docker-compose logs -f | grep "LEADER"
+```
 
 ### 6. Management UI
 - [ ] **Dashboard Development**: Create a simple UI to list exchanges, monitor queue depths, and view DLQ status.

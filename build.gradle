@@ -16,8 +16,13 @@ dependencies {
     implementation 'io.quarkus:quarkus-hibernate-orm-panache'
     implementation 'org.xerial:sqlite-jdbc:3.45.1.0'
     implementation 'org.hibernate.orm:hibernate-community-dialects:6.4.4.Final'
+    implementation 'org.apache.ratis:ratis-server:3.0.1'
+    implementation 'org.apache.ratis:ratis-netty:3.0.1'
+    implementation 'org.apache.ratis:ratis-grpc:3.0.1'
+    implementation 'org.apache.ratis:ratis-metrics-default:3.0.1'
     testImplementation 'io.quarkus:quarkus-junit'
     testImplementation 'io.rest-assured:rest-assured'
+    testImplementation 'org.awaitility:awaitility:4.2.0'
 }
 
 group = 'io.dist'
