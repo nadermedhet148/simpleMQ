@@ -20,34 +20,18 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 - **Framework**: Developed using the Java Quarkus framework.
 - **Quality Assurance**: Inclusion of Unit, Integration, and End-to-End (E2E) test cases.
 
----
+## Cluster Management API
 
-## Development Roadmap & Tasks
+`simpleMQ` supports dynamic cluster membership and leader discovery via REST:
 
-### 1. Architecture & Domain Modeling
-- [x] **Define Core Domain Entities**: Model the `Message`, `Exchange`, `Queue`, and `Binding` objects.
-- [x] **Define Exchange Routing Logic**: Plan the interface for Direct and Fanout routing strategies.
-- [x] **Data Schema Design**: Design the SQLite schema for persisting metadata (exchanges, queues) and message payloads.
-
-### 2. Storage & Persistence Layer
-- [x] **In-Memory Buffer Implementation**: Design a high-performance in-memory queueing system.
-- [x] **SQLite Integration**: Configure Quarkus with SQLite for disk persistence.
-- [x] **Persistence Manager**: Create a service that synchronizes in-memory state with the disk and handles recovery on startup.
-
-### 3. Messaging Engine
-- [x] **Exchange Routing Engine**: Implement logic to route messages from exchanges to bound queues based on type.
-- [x] **Queue Management Service**: Logic for group-based queue assignment and message ordering.
-- [x] **Ack/Nack & DLQ Workflow**: Implement the message lifecycle state machine (Pending -> Delivered -> Acked/DLQ).
-
-### 4. API & Integration
-- [x] **Broker Management API**: REST endpoints for CRUD operations on Exchanges and Queues.
-- [x] **Publishing API**: REST endpoint for producers to inject messages into the broker.
-- [x] **Polling API**: REST endpoint for consumers to pull and acknowledge messages.
-
-### 5. Clustering & High Availability
-- [x] **Raft Algorithm Integration**: Implement or integrate a Raft library for leader election and log replication.
-- [ ] **Quorum-based Replication**: Ensure messages are replicated to a majority of nodes before being considered "persisted".
-- [ ] **Cluster Membership Management**: Logic for nodes to join/leave the cluster and discover the leader.
+- **Leader Discovery**: `GET /api/cluster/leader`
+  - Returns the ID of the current leader node.
+- **List Peers**: `GET /api/cluster/peers`
+  - Returns the list of all nodes currently in the cluster.
+- **Join Cluster**: `POST /api/cluster/join?id=nodeX&address=host:port`
+  - Adds a new node to the cluster. **Must be called on the current leader.**
+- **Leave Cluster**: `POST /api/cluster/leave?id=nodeX`
+  - Removes a node from the cluster. **Must be called on the current leader.**
 
 ## Running the Cluster
 

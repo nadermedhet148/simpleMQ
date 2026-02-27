@@ -108,6 +108,66 @@ public class RaftService {
         }
     }
 
+    public List<RaftPeer> getPeers() {
+        return new ArrayList<>(raftGroup.getPeers());
+    }
+
+    public boolean addPeer(String id, String address) {
+        if (!isLeader()) {
+            return false;
+        }
+
+        RaftPeer newPeer = RaftPeer.newBuilder()
+                .setId(id)
+                .setAddress(address)
+                .build();
+
+        List<RaftPeer> currentPeers = new ArrayList<>(raftGroup.getPeers());
+        if (currentPeers.stream().anyMatch(p -> p.getId().toString().equals(id))) {
+            return true; // Already joined
+        }
+        currentPeers.add(newPeer);
+
+        return setConfiguration(currentPeers);
+    }
+
+    public boolean removePeer(String id) {
+        if (!isLeader()) {
+            return false;
+        }
+
+        List<RaftPeer> currentPeers = new ArrayList<>(raftGroup.getPeers());
+        List<RaftPeer> newPeers = currentPeers.stream()
+                .filter(p -> !p.getId().toString().equals(id))
+                .collect(Collectors.toList());
+
+        if (currentPeers.size() == newPeers.size()) {
+            return true; // Already gone
+        }
+
+        return setConfiguration(newPeers);
+    }
+
+    private boolean setConfiguration(List<RaftPeer> newPeers) {
+        LOG.infof("Setting new Raft configuration: %s", newPeers);
+        try (RaftClient client = RaftClient.newBuilder()
+                .setProperties(new RaftProperties())
+                .setRaftGroup(raftGroup)
+                .build()) {
+
+            RaftClientReply reply = client.admin().setConfiguration(newPeers);
+            LOG.infof("Raft setConfiguration reply: %s", reply);
+            if (reply.isSuccess()) {
+                this.raftGroup = RaftGroup.valueOf(groupId, newPeers);
+                return true;
+            }
+            return false;
+        } catch (IOException e) {
+            LOG.error("Failed to update cluster configuration", e);
+            return false;
+        }
+    }
+
     public boolean replicateMessage(io.dist.model.Message msg) {
         String command = String.format("PUBLISH|%s|%s|%s|%s|%s|%s",
                 msg.id, msg.payload, msg.routingKey, msg.exchange, msg.queueName, msg.timestamp.toString());
