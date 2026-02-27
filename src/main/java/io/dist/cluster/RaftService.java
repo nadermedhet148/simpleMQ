@@ -3,6 +3,7 @@ package io.dist.cluster;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import org.apache.ratis.client.RaftClient;
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.grpc.GrpcConfigKeys;
 import org.apache.ratis.protocol.*;
@@ -14,7 +15,7 @@ import org.jboss.logging.Logger;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -33,6 +34,7 @@ public class RaftService {
 
     private RaftServer raftServer;
     private final RaftGroupId groupId = RaftGroupId.valueOf(UUID.nameUUIDFromBytes("simpleMQ-cluster".getBytes()));
+    private RaftGroup raftGroup;
 
     void onStart(@Observes StartupEvent ev) throws IOException {
         LOG.infof("Starting Raft Node: %s at %s", nodeId, address);
@@ -49,6 +51,8 @@ public class RaftService {
                 })
                 .collect(Collectors.toList());
 
+        raftGroup = RaftGroup.valueOf(groupId, raftPeers);
+
         RaftProperties properties = new RaftProperties();
         
         final int port = NetUtils.createSocketAddr(address).getPort();
@@ -59,7 +63,7 @@ public class RaftService {
 
         raftServer = RaftServer.newBuilder()
                 .setServerId(peerId)
-                .setGroup(RaftGroup.valueOf(groupId, raftPeers))
+                .setGroup(raftGroup)
                 .setProperties(properties)
                 .setStateMachine(new SimpleStateMachine())
                 .build();
@@ -101,6 +105,23 @@ public class RaftService {
             return raftServer.getDivision(groupId).getInfo().getLeaderId();
         } catch (IOException e) {
             return null;
+        }
+    }
+
+    public boolean replicateMessage(io.dist.model.Message msg) {
+        String command = String.format("PUBLISH|%s|%s|%s|%s|%s|%s",
+                msg.id, msg.payload, msg.routingKey, msg.exchange, msg.queueName, msg.timestamp.toString());
+
+        try (RaftClient client = RaftClient.newBuilder()
+                .setProperties(new RaftProperties())
+                .setRaftGroup(raftGroup)
+                .build()) {
+            
+            RaftClientReply reply = client.io().send(org.apache.ratis.protocol.Message.valueOf(command));
+            return reply.isSuccess();
+        } catch (IOException e) {
+            LOG.error("Failed to replicate message", e);
+            return false;
         }
     }
 }

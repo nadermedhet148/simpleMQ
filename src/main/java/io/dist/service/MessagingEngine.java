@@ -25,7 +25,9 @@ public class MessagingEngine {
     @Inject
     PersistenceManager persistenceManager;
 
-    @Transactional
+    @Inject
+    io.dist.cluster.RaftService raftService;
+
     public void publish(String exchange, String routingKey, String payload) {
         Message template = new Message(payload, routingKey, exchange, null);
         List<String> targetQueues = routingEngine.getTargetQueues(template);
@@ -35,10 +37,21 @@ public class MessagingEngine {
             return;
         }
 
+        // Check if we are the leader before accepting publish
+        if (!raftService.isLeader()) {
+            LOG.warn("This node is not the LEADER. Rejecting publish request.");
+            throw new RuntimeException("Not the leader. Please send request to: " + raftService.getLeaderId());
+        }
+
         for (String queueName : targetQueues) {
             Message msg = new Message(payload, routingKey, exchange, queueName);
-            persistenceManager.saveMessage(msg);
-            storageService.getBuffer(queueName).enqueue(msg);
+            
+            // Replicate to cluster. This will also handle local persistence and enqueuing via StateMachine
+            boolean success = raftService.replicateMessage(msg);
+            if (!success) {
+                LOG.errorf("Failed to replicate message %s to cluster", msg.id);
+                throw new RuntimeException("Failed to replicate message to quorum");
+            }
         }
     }
 
