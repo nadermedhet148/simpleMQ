@@ -1,13 +1,17 @@
 services:
   node1:
+    hostname: node1
     build:
       context: .
       dockerfile: src/main/docker/Dockerfile.jvm
     environment:
       - NODE_ID=node1
-      - NODE_ADDRESS=node1:9851
+      - NODE_ADDRESS=0.0.0.0:9851
       - CLUSTER_PEERS=node1=node1:9851,node2=node2:9851,node3=node3:9851
-      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite:/data/simplemq-1.db
+      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite:/data/simplemq-1.db?busy_timeout=5000
+      # To ignore saving files and run in ephemeral mode, uncomment the following line
+      # and consider using :memory: for SQLite URL or removing the volumes.
+      # - SIMPLEMQ_PERSISTENCE_ENABLED=false
     ports:
       - "8081:8080"
       - "9851:9851"
@@ -17,14 +21,15 @@ services:
       - simplemq-net
 
   node2:
+    hostname: node2
     build:
       context: .
       dockerfile: src/main/docker/Dockerfile.jvm
     environment:
       - NODE_ID=node2
-      - NODE_ADDRESS=node2:9851
+      - NODE_ADDRESS=0.0.0.0:9851
       - CLUSTER_PEERS=node1=node1:9851,node2=node2:9851,node3=node3:9851
-      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite:/data/simplemq-2.db
+      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite:/data/simplemq-2.db?busy_timeout=5000
     ports:
       - "8082:8080"
       - "9852:9851"
@@ -34,14 +39,15 @@ services:
       - simplemq-net
 
   node3:
+    hostname: node3
     build:
       context: .
       dockerfile: src/main/docker/Dockerfile.jvm
     environment:
       - NODE_ID=node3
-      - NODE_ADDRESS=node3:9851
+      - NODE_ADDRESS=0.0.0.0:9851
       - CLUSTER_PEERS=node1=node1:9851,node2=node2:9851,node3=node3:9851
-      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite:/data/simplemq-3.db
+      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite:/data/simplemq-3.db?busy_timeout=5000
     ports:
       - "8083:8080"
       - "9853:9851"

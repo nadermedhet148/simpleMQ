@@ -16,9 +16,20 @@ public class PersistenceManager {
     @Inject
     StorageService storageService;
 
+    @org.eclipse.microprofile.config.inject.ConfigProperty(name = "simplemq.persistence.enabled", defaultValue = "true")
+    boolean persistenceEnabled;
+
     void onStart(@Observes StartupEvent ev) {
-        LOG.info("Broker starting, recovering messages from database...");
-        recoverMessages();
+        if (persistenceEnabled) {
+            LOG.info("Broker starting, recovering messages from database...");
+            recoverMessages();
+        } else {
+            LOG.info("Broker starting in ephemeral mode, skipping recovery.");
+        }
+    }
+
+    public boolean isPersistenceEnabled() {
+        return persistenceEnabled;
     }
 
     @Transactional
@@ -39,7 +50,11 @@ public class PersistenceManager {
 
     @Transactional
     public void saveMessage(Message message) {
-        message.persist();
+        if (Message.findById(message.id) == null) {
+            message.persist();
+        } else {
+            LOG.infof("Message %s already exists in database, skipping persist", message.id);
+        }
     }
 
     @Transactional

@@ -47,6 +47,18 @@ Nodes will be available at:
 - Node 2: http://localhost:8082
 - Node 3: http://localhost:8083
 
+### Ephemeral Mode (Ignore saving files)
+
+If you want to run `simpleMQ` without any persistent storage (e.g., for testing or if you are having issues with Docker volumes), you can use the **Ephemeral Mode**. This mode uses temporary directories for Raft logs and an in-memory database for SQLite.
+
+To enable it, set the following environment variables:
+- `SIMPLEMQ_PERSISTENCE_ENABLED=false`
+- `QUARKUS_DATASOURCE_JDBC_URL=jdbc:sqlite::memory:`
+
+When `SIMPLEMQ_PERSISTENCE_ENABLED` is `false`, the broker will:
+1. Use a temporary directory for Raft logs that is automatically cleaned up on shutdown.
+2. Skip message recovery from the database on startup.
+
 Check the logs to see the leader election:
 ```bash
 docker-compose logs -f | grep "LEADER"

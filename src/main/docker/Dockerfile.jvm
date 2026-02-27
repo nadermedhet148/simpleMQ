@@ -80,23 +80,32 @@
 # You can find more information about the UBI base runtime images and their configuration here:
 # https://rh-openjdk.github.io/redhat-openjdk-containers/
 ###
-FROM registry.access.redhat.com/ubi9/openjdk-21-runtime:1.24
+FROM eclipse-temurin:21-jre-jammy
 
 ENV LANGUAGE='en_US:en'
 
+# Ensure the application runs as user 185 (as requested by many enterprise environments and the previous image)
+# and that both the deployment and data directories are writable.
+RUN groupadd -g 185 simplemq && \
+    useradd -u 185 -g 185 -m -d /deployments simplemq && \
+    mkdir -p /data && \
+    chown -R 185:185 /deployments /data
+
+USER 185
+WORKDIR /deployments
 
 # We make four distinct layers so if there are application changes the library layers can be re-used
-COPY --chown=185 build/quarkus-app/lib/ /deployments/lib/
-COPY --chown=185 build/quarkus-app/*.jar /deployments/
-COPY --chown=185 build/quarkus-app/app/ /deployments/app/
-COPY --chown=185 build/quarkus-app/quarkus/ /deployments/quarkus/
+COPY --chown=185:185 build/quarkus-app/lib/ /deployments/lib/
+COPY --chown=185:185 build/quarkus-app/*.jar /deployments/
+COPY --chown=185:185 build/quarkus-app/app/ /deployments/app/
+COPY --chown=185:185 build/quarkus-app/quarkus/ /deployments/quarkus/
 
 EXPOSE 8080 9851
-USER 0
-RUN mkdir -p /data && chown 185 /data
-USER 185
+
+# Environment variables to configure the Quarkus application
 ENV JAVA_OPTS_APPEND="-Dquarkus.http.host=0.0.0.0 -Djava.util.logging.manager=org.jboss.logmanager.LogManager"
 ENV JAVA_APP_JAR="/deployments/quarkus-run.jar"
 
-ENTRYPOINT [ "/opt/jboss/container/java/run/run-java.sh" ]
+# Use a direct java call instead of the UBI-specific run-java.sh
+ENTRYPOINT [ "sh", "-c", "java $JAVA_OPTS $JAVA_OPTS_APPEND -jar $JAVA_APP_JAR" ]
 

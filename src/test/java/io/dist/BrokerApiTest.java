@@ -64,17 +64,23 @@ public class BrokerApiTest {
             .statusCode(202);
 
         // 5. Poll Message
-        String messageId = given()
-            .when().get("/api/poll/test-queue")
-            .then()
-            .statusCode(200)
-            .body("payload", is("hello simpleMQ"))
-            .body("routingKey", is("test-key"))
-            .extract().path("id");
+        final String[] messageId = new String[1];
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5)).until(() -> {
+            var response = given()
+                .when().get("/api/poll/test-queue");
+            if (response.getStatusCode() == 200) {
+                messageId[0] = response.then()
+                    .body("payload", is("hello simpleMQ"))
+                    .body("routingKey", is("test-key"))
+                    .extract().path("id");
+                return true;
+            }
+            return false;
+        });
 
         // 6. Acknowledge Message
         given()
-            .pathParam("messageId", messageId)
+            .pathParam("messageId", messageId[0])
             .when().post("/api/poll/ack/{messageId}")
             .then()
             .statusCode(200);

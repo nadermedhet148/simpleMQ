@@ -28,6 +28,9 @@ public class MessagingEngine {
     @Inject
     io.dist.cluster.RaftService raftService;
 
+    @Inject
+    MetricsService metricsService;
+
     public void publish(String exchange, String routingKey, String payload) {
         Message template = new Message(payload, routingKey, exchange, null);
         List<String> targetQueues = routingEngine.getTargetQueues(template);
@@ -52,6 +55,7 @@ public class MessagingEngine {
                 LOG.errorf("Failed to replicate message %s to cluster", msg.id);
                 throw new RuntimeException("Failed to replicate message to quorum");
             }
+            metricsService.incrementPublished();
         }
     }
 
@@ -61,6 +65,7 @@ public class MessagingEngine {
         if (msg != null) {
             msg.status = MessageStatus.ACKED;
             LOG.infof("Message %s acknowledged", messageId);
+            metricsService.incrementAcked();
         }
     }
 
@@ -69,9 +74,22 @@ public class MessagingEngine {
         Message msg = Message.findById(messageId);
         if (msg == null) return;
 
+        metricsService.incrementNacked();
         if (requeue && msg.deliveryCount < MAX_DELIVERY_ATTEMPTS) {
             msg.status = MessageStatus.PENDING;
-            storageService.getBuffer(msg.queueName).enqueue(msg);
+            
+            // Enqueue a fresh copy to avoid Hibernate session issues when polling
+            Message copy = new Message();
+            copy.id = msg.id;
+            copy.payload = msg.payload;
+            copy.routingKey = msg.routingKey;
+            copy.exchange = msg.exchange;
+            copy.queueName = msg.queueName;
+            copy.timestamp = msg.timestamp;
+            copy.deliveryCount = msg.deliveryCount;
+            copy.status = MessageStatus.PENDING;
+            
+            storageService.getBuffer(msg.queueName).enqueue(copy);
             LOG.infof("Message %s nacked and requeued", messageId);
         } else {
             routeToDLQ(msg);
@@ -85,23 +103,29 @@ public class MessagingEngine {
         msg.queueName = dlqName;
         storageService.getBuffer(dlqName).enqueue(msg);
         LOG.infof("Message %s moved to DLQ %s", msg.id, dlqName);
+        metricsService.incrementDLQ();
     }
     
     public Message poll(String queueName) {
+        metricsService.incrementPollRequests();
         Message msg = storageService.getBuffer(queueName).dequeue();
         if (msg != null) {
             markAsDelivered(msg.id);
-            return Message.findById(msg.id);
+            // Re-fetch from DB to get updated delivery count and status
+            Message updated = Message.findById(msg.id);
+            if (updated != null) {
+                return updated;
+            }
+            // Fallback to the message from memory if DB lookup fails (should not happen normally)
+            LOG.warnf("Failed to find message %s in database during poll, using memory version", msg.id);
+            return msg;
         }
         return null;
     }
 
     @Transactional
     public void markAsDelivered(String messageId) {
-        Message msg = Message.findById(messageId);
-        if (msg != null) {
-            msg.status = MessageStatus.DELIVERED;
-            msg.deliveryCount++;
-        }
+        Message.update("status = ?1, deliveryCount = deliveryCount + 1 where id = ?2", 
+                MessageStatus.DELIVERED, messageId);
     }
 }

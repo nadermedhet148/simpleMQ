@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>simpleMQ Management Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .navbar { background-color: #343a40; }
+        .card { margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .metric-value { font-size: 2rem; font-weight: bold; }
+        .leader-badge { font-size: 0.8rem; vertical-align: middle; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark mb-4">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">simpleMQ Management</span>
+            <div id="node-info" class="text-light">
+                Node: <span id="current-node">...</span> | Leader: <span id="current-leader">...</span>
+                <span id="leader-tag" class="badge bg-success leader-badge d-none">LEADER</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Summary Cards -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card text-center text-white bg-primary">
+                    <div class="card-body">
+                        <div class="card-title">Messages Published</div>
+                        <div class="metric-value" id="m-published">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center text-white bg-success">
+                    <div class="card-body">
+                        <div class="card-title">Messages Acked</div>
+                        <div class="metric-value" id="m-acked">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center text-white bg-warning">
+                    <div class="card-body">
+                        <div class="card-title">Messages Nacked</div>
+                        <div class="metric-value" id="m-nacked">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center text-white bg-danger">
+                    <div class="card-body">
+                        <div class="card-title">In DLQ</div>
+                        <div class="metric-value" id="m-dlq">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Queues -->
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Queues</h5>
+                        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#createQueueModal">New Queue</button>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Group</th>
+                                    <th>Messages</th>
+                                    <th>Durable</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="queues-table">
+                                <!-- Queues will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Exchanges</h5>
+                        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#createExchangeModal">New Exchange</button>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Durable</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="exchanges-table">
+                                <!-- Exchanges will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cluster Info & System -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header"><h5>Cluster Nodes</h5></div>
+                    <div class="card-body">
+                        <ul class="list-group" id="peers-list">
+                            <!-- Peers will be populated here -->
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header"><h5>System Metrics</h5></div>
+                    <div class="card-body">
+                        <p>Poll Requests: <span id="m-poll-requests" class="fw-bold">0</span></p>
+                        <hr>
+                        <button class="btn btn-secondary w-100" onclick="refreshData()">Refresh Now</button>
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="auto-refresh" checked>
+                            <label class="form-check-label" for="auto-refresh">Auto-refresh (5s)</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal fade" id="createQueueModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5>Create Queue</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <form id="queueForm">
+                        <div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="q-name" required></div>
+                        <div class="mb-3"><label class="form-label">Group</label><input type="text" class="form-control" id="q-group" value="default"></div>
+                        <div class="form-check mb-3"><input type="checkbox" class="form-check-input" id="q-durable" checked><label class="form-check-label">Durable</label></div>
+                    </form>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-primary" onclick="createQueue()">Create</button></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="createExchangeModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5>Create Exchange</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <form id="exchangeForm">
+                        <div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="e-name" required></div>
+                        <div class="mb-3">
+                            <label class="form-label">Type</label>
+                            <select class="form-select" id="e-type">
+                                <option value="DIRECT">Direct</option>
+                                <option value="FANOUT">Pub-Sub (Fanout)</option>
+                            </select>
+                        </div>
+                        <div class="form-check mb-3"><input type="checkbox" class="form-check-input" id="e-durable" checked><label class="form-check-label">Durable</label></div>
+                    </form>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-primary" onclick="createExchange()">Create</button></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function fetchData(url, method = 'GET', body = null) {
+            const options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || response.statusText);
+            }
+            if (response.status === 204) return null;
+            return await response.json();
+        }
+
+        async function refreshData() {
+            try {
+                const summary = await fetchData('/api/management/summary');
+                
+                // Header
+                document.getElementById('current-node').textContent = summary.nodeId;
+                document.getElementById('current-leader').textContent = summary.leaderId;
+                if (summary.isLeader) {
+                    document.getElementById('leader-tag').classList.remove('d-none');
+                } else {
+                    document.getElementById('leader-tag').classList.add('d-none');
+                }
+
+                // Metrics
+                document.getElementById('m-published').textContent = summary.metrics.totalMessagesPublished;
+                document.getElementById('m-acked').textContent = summary.metrics.totalMessagesAcked;
+                document.getElementById('m-nacked').textContent = summary.metrics.totalMessagesNacked;
+                document.getElementById('m-dlq').textContent = summary.metrics.totalMessagesDLQ;
+                document.getElementById('m-poll-requests').textContent = summary.metrics.totalPollRequests;
+
+                // Queues
+                const qBody = document.getElementById('queues-table');
+                qBody.innerHTML = '';
+                summary.queues.forEach(q => {
+                    const row = `<tr>
+                        <td>${q.name}</td>
+                        <td>${q.group}</td>
+                        <td>${q.messageCount}</td>
+                        <td>${q.durable ? '✅' : '❌'}</td>
+                        <td><button class="btn btn-sm btn-outline-danger" onclick="deleteQueue('${q.name}')">Delete</button></td>
+                    </tr>`;
+                    qBody.innerHTML += row;
+                });
+
+                // Exchanges
+                const eBody = document.getElementById('exchanges-table');
+                eBody.innerHTML = '';
+                summary.exchanges.forEach(e => {
+                    const row = `<tr>
+                        <td>${e.name}</td>
+                        <td>${e.type}</td>
+                        <td>${e.durable ? '✅' : '❌'}</td>
+                        <td><button class="btn btn-sm btn-outline-danger" onclick="deleteExchange('${e.name}')">Delete</button></td>
+                    </tr>`;
+                    eBody.innerHTML += row;
+                });
+
+                // Peers
+                const pList = document.getElementById('peers-list');
+                pList.innerHTML = '';
+                summary.peers.forEach(p => {
+                    const isLeader = p.split('=')[0] === summary.leaderId;
+                    const li = `<li class="list-group-item ${isLeader ? 'list-group-item-info' : ''}">
+                        ${p} ${isLeader ? '<span class="badge bg-primary float-end">Leader</span>' : ''}
+                    </li>`;
+                    pList.innerHTML += li;
+                });
+
+            } catch (error) {
+                console.error('Failed to refresh data', error);
+            }
+        }
+
+        async function createQueue() {
+            const name = document.getElementById('q-name').value;
+            const group = document.getElementById('q-group').value;
+            const durable = document.getElementById('q-durable').checked;
+            try {
+                await fetchData('/api/management/queues', 'POST', { name, queueGroup: group, durable, autoDelete: false });
+                bootstrap.Modal.getInstance(document.getElementById('createQueueModal')).hide();
+                refreshData();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function deleteQueue(name) {
+            if (!confirm('Are you sure you want to delete queue ' + name + '?')) return;
+            try {
+                await fetch('/api/management/queues/' + name, { method: 'DELETE' });
+                refreshData();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function createExchange() {
+            const name = document.getElementById('e-name').value;
+            const type = document.getElementById('e-type').value;
+            const durable = document.getElementById('e-durable').checked;
+            try {
+                await fetchData('/api/management/exchanges', 'POST', { name, type, durable });
+                bootstrap.Modal.getInstance(document.getElementById('createExchangeModal')).hide();
+                refreshData();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        async function deleteExchange(name) {
+            if (!confirm('Are you sure you want to delete exchange ' + name + '?')) return;
+            try {
+                await fetch('/api/management/exchanges/' + name, { method: 'DELETE' });
+                refreshData();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        // Init
+        refreshData();
+        setInterval(() => {
+            if (document.getElementById('auto-refresh').checked) refreshData();
+        }, 5000);
+    </script>
+</body>
+</html>

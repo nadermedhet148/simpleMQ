@@ -1,5 +1,14 @@
+# Ignore everything
 *
-!build/*-runner
-!build/*-runner.jar
-!build/lib/*
-!build/quarkus-app/*
+
+# Allow gradle wrapper
+!gradle/wrapper/gradle-wrapper.jar
+!gradlew
+!gradlew.bat
+
+# Allow build artifacts for Quarkus
+!build/
+!build/quarkus-app/
+!build/quarkus-app/**
+!build/lib/
+!build/*.jar
