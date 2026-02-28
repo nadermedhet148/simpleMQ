@@ -55,12 +55,19 @@ public class MessagingEngine {
                 LOG.errorf("Failed to replicate message %s to cluster", msg.id);
                 throw new RuntimeException("Failed to replicate message to quorum");
             }
-            metricsService.incrementPublished();
         }
     }
 
     @Transactional
     public void acknowledgeMessage(String messageId) {
+        if (!raftService.isLeader()) {
+            throw new RuntimeException("Not the leader");
+        }
+        raftService.replicateAck(messageId);
+    }
+
+    @Transactional
+    public void acknowledgeMessageLocal(String messageId) {
         Message msg = Message.findById(messageId);
         if (msg != null) {
             msg.status = MessageStatus.ACKED;
@@ -71,6 +78,14 @@ public class MessagingEngine {
 
     @Transactional
     public void nackMessage(String messageId, boolean requeue) {
+        if (!raftService.isLeader()) {
+            throw new RuntimeException("Not the leader");
+        }
+        raftService.replicateNack(messageId, requeue);
+    }
+
+    @Transactional
+    public void nackMessageLocal(String messageId, boolean requeue) {
         Message msg = Message.findById(messageId);
         if (msg == null) return;
 
@@ -107,20 +122,33 @@ public class MessagingEngine {
     }
     
     public Message poll(String queueName) {
+        if (!raftService.isLeader()) {
+            throw new RuntimeException("Not the leader");
+        }
         metricsService.incrementPollRequests();
         Message msg = storageService.getBuffer(queueName).dequeue();
         if (msg != null) {
-            markAsDelivered(msg.id);
+            // Replicate the poll so other nodes also dequeue it and mark it as delivered
+            raftService.replicatePoll(queueName, msg.id);
+            
             // Re-fetch from DB to get updated delivery count and status
             Message updated = Message.findById(msg.id);
             if (updated != null) {
                 return updated;
             }
-            // Fallback to the message from memory if DB lookup fails (should not happen normally)
-            LOG.warnf("Failed to find message %s in database during poll, using memory version", msg.id);
             return msg;
         }
         return null;
+    }
+
+    @Transactional
+    public void pollLocal(String queueName, String messageId) {
+        // If we are the leader, we already dequeued it in poll(). 
+        // If we are a follower, we need to dequeue it now.
+        if (!raftService.isLeader()) {
+            storageService.getBuffer(queueName).dequeueById(messageId);
+        }
+        markAsDelivered(messageId);
     }
 
     @Transactional

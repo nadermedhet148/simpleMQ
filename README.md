@@ -33,19 +33,37 @@ A lightweight message broker built with Java Quarkus, supporting both in-memory 
 - **Leave Cluster**: `POST /api/cluster/leave?id=nodeX`
   - Removes a node from the cluster. **Must be called on the current leader.**
 
-## Running the Cluster
+#### High Availability & Load Balancing
 
-To start a 3-node simpleMQ cluster, use Docker Compose:
+`simpleMQ` now includes a transparent proxy mechanism and an optional Nginx load balancer to handle leader detection automatically.
+
+- **Load Balancer (Nginx)**: http://localhost:8080
+  - Distributes requests across all nodes in the cluster.
+- **Transparent Proxy**: If a write request (Publish, Poll, Management) hits a follower node, it is automatically and transparently proxied to the current Raft leader.
+- **State Replication**: All operations (Exchange/Queue creation, Publishing, Polling, Ack/Nack) are replicated via Raft to ensure cluster-wide consistency.
+
+#### Running the Cluster
+
+To start the 3-node cluster with the Nginx load balancer:
 
 ```bash
 ./gradlew build
 docker-compose up --build
 ```
 
-Nodes will be available at:
+Nodes are available at:
+- Load Balancer: http://localhost:8080
 - Node 1: http://localhost:8081
 - Node 2: http://localhost:8082
 - Node 3: http://localhost:8083
+
+#### Load Testing via Load Balancer
+
+You can now run the load test against the load balancer:
+```bash
+BASE_URL=http://localhost:8080/api node load_test.js
+```
+The load balancer will distribute requests, and the nodes will internally ensure they reach the leader.
 
 ### Ephemeral Mode (Ignore saving files)
 
@@ -72,3 +90,20 @@ docker-compose logs -f | grep "LEADER"
 - [ ] **Unit Testing**: Test routing logic and individual component behavior.
 - [ ] **Integration Testing**: Test API endpoints with an embedded SQLite database.
 - [ ] **E2E Testing**: Simulate a multi-node cluster to verify leader election and failover scenarios.
+
+#### Load Testing Tool
+A Node.js script `load_test.js` is provided to simulate producer and consumer activity.
+
+To run the load test:
+```bash
+# Default (localhost:8080)
+node load_test.js
+
+# For Docker Compose cluster (Node 1)
+BASE_URL=http://localhost:8081/api node load_test.js
+```
+
+Options:
+- `BASE_URL`: The API base URL (default: `http://localhost:8080/api`).
+- `MODE`: `all`, `producer`, `consumer`, or `setup` (default: `all`).
+- `DELAY`: Delay between producer messages in ms (default: `1000`).

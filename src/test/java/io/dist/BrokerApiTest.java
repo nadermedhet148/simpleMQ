@@ -21,12 +21,27 @@ public class BrokerApiTest {
 
     @jakarta.transaction.Transactional
     @org.junit.jupiter.api.BeforeEach
-    public void setup() {
+    public void setup() throws InterruptedException {
         storageService.clear();
         io.dist.model.Message.deleteAll();
         io.dist.model.Binding.deleteAll();
         io.dist.model.Queue.deleteAll();
         io.dist.model.Exchange.deleteAll();
+        
+        // Wait for leader election
+        for (int i = 0; i < 30; i++) {
+            try {
+                Boolean isLeader = given()
+                        .when().get("/api/management/summary")
+                        .then().extract().path("isLeader");
+                if (isLeader != null && isLeader) {
+                    return;
+                }
+            } catch (Exception e) {
+                // Node might not be ready yet
+            }
+            Thread.sleep(1000);
+        }
     }
 
     @Test

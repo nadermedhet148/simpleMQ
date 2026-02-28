@@ -4,6 +4,10 @@ import io.dist.model.Message;
 import io.dist.model.MessageStatus;
 import io.dist.storage.PersistenceManager;
 import io.dist.storage.StorageService;
+import io.dist.service.MessagingEngine;
+import io.dist.service.MetricsService;
+import io.dist.model.ExchangeType;
+import io.dist.service.QueueService;
 import io.dist.model.RaftMetadata;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.inject.spi.CDI;
@@ -14,6 +18,7 @@ import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
@@ -59,6 +64,18 @@ public class SimpleStateMachine extends BaseStateMachine {
         }
     }
 
+    private QueueService getQueueService() {
+        return CDI.current().select(QueueService.class).get();
+    }
+
+    private MessagingEngine getMessagingEngine() {
+        return CDI.current().select(MessagingEngine.class).get();
+    }
+
+    private MetricsService getMetricsService() {
+        return CDI.current().select(MetricsService.class).get();
+    }
+
     @Override
     public CompletableFuture<org.apache.ratis.protocol.Message> applyTransaction(TransactionContext trx) {
         final long index = trx.getLogEntry().getIndex();
@@ -67,13 +84,14 @@ public class SimpleStateMachine extends BaseStateMachine {
         LOG.infof("Applying transaction: %s at index %d", command, index);
 
         try {
-            // Simple command format: "PUBLISH|id|payload|routingKey|exchange|queueName|timestamp"
-            String[] parts = command.split("\\|");
-            if (parts[0].equals("PUBLISH")) {
+            String[] parts = command.split("\\|", -1);
+            String type = parts[0];
+            
+            if (type.equals("PUBLISH")) {
                 Message msg = new Message();
                 msg.id = parts[1];
-                msg.payload = parts[2];
-                msg.routingKey = parts[3];
+                msg.payload = decodeValue(parts[2]);
+                msg.routingKey = decodeValue(parts[3]);
                 msg.exchange = parts[4];
                 msg.queueName = parts[5];
                 msg.timestamp = LocalDateTime.parse(parts[6]);
@@ -81,36 +99,61 @@ public class SimpleStateMachine extends BaseStateMachine {
                 msg.status = MessageStatus.PENDING;
 
                 LOG.infof("Processing message %s for queue %s", msg.id, msg.queueName);
-
-                // Persist to local SQLite and Enqueue to local buffer
-                PersistenceManager pm = getPersistenceManager();
-                pm.saveMessage(msg);
-
-                StorageService ss = getStorageService();
-                ss.getBuffer(msg.queueName).enqueue(msg);
-                
-                // Update last applied index in RaftMetadata
-                QuarkusTransaction.requiringNew().run(() -> {
-                    RaftMetadata metadata = RaftMetadata.findById(getNodeId());
-                    if (metadata == null) {
-                        metadata = new RaftMetadata(getNodeId(), term, null, index, term);
-                        metadata.persist();
-                    } else {
-                        metadata.lastAppliedIndex = index;
-                        metadata.lastAppliedTerm = term;
-                        if (metadata.currentTerm < term) {
-                            metadata.currentTerm = term;
-                        }
-                    }
-                });
-
-                LOG.infof("Successfully replicated and persisted message %s to queue %s", msg.id, msg.queueName);
+                getPersistenceManager().saveMessage(msg);
+                getStorageService().getBuffer(msg.queueName).enqueue(msg);
+                getMetricsService().incrementPublished();
+            } else if (type.equals("POLL")) {
+                getMessagingEngine().pollLocal(parts[1], parts[2]);
+            } else if (type.equals("ACK")) {
+                getMessagingEngine().acknowledgeMessageLocal(parts[1]);
+            } else if (type.equals("NACK")) {
+                getMessagingEngine().nackMessageLocal(parts[1], Boolean.parseBoolean(parts[2]));
+                // nackMessageLocal might increment Nacked or DLQ internally, let's check
+            } else if (type.equals("CREATE_EXCHANGE")) {
+                getQueueService().createExchangeLocal(parts[1], ExchangeType.valueOf(parts[2]), Boolean.parseBoolean(parts[3]));
+            } else if (type.equals("DELETE_EXCHANGE")) {
+                getQueueService().deleteExchangeLocal(parts[1]);
+            } else if (type.equals("CREATE_QUEUE")) {
+                getQueueService().createQueueLocal(parts[1], parts[2], Boolean.parseBoolean(parts[3]), Boolean.parseBoolean(parts[4]));
+            } else if (type.equals("DELETE_QUEUE")) {
+                getQueueService().deleteQueueLocal(parts[1]);
+            } else if (type.equals("BIND")) {
+                getQueueService().bindLocal(parts[1], parts[2], decodeValue(parts[3]));
+            } else if (type.equals("UNBIND")) {
+                getQueueService().unbindLocal(parts[1], parts[2], decodeValue(parts[3]));
             }
+
+            // Update last applied index in RaftMetadata
+            QuarkusTransaction.requiringNew().run(() -> {
+                RaftMetadata metadata = RaftMetadata.findById(getNodeId());
+                if (metadata == null) {
+                    metadata = new RaftMetadata(getNodeId(), term, null, index, term);
+                    metadata.persist();
+                } else {
+                    metadata.lastAppliedIndex = index;
+                    metadata.lastAppliedTerm = term;
+                    if (metadata.currentTerm < term) {
+                        metadata.currentTerm = term;
+                    }
+                }
+            });
         } catch (Exception e) {
             LOG.error("Failed to apply transaction: " + command, e);
             return CompletableFuture.completedFuture(org.apache.ratis.protocol.Message.valueOf("FAILURE|" + e.getMessage()));
         }
 
         return CompletableFuture.completedFuture(org.apache.ratis.protocol.Message.valueOf("SUCCESS"));
+    }
+
+    private String decodeValue(String value) {
+        if (value == null || value.equals("null")) {
+            return null;
+        }
+        try {
+            return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            // Fallback for old non-base64 messages
+            return value;
+        }
     }
 }

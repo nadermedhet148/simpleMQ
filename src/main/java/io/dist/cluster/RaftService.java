@@ -20,6 +20,7 @@ import org.jboss.logging.Logger;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -77,24 +78,18 @@ public class RaftService {
         final int port = extractPort(address);
         GrpcConfigKeys.Server.setPort(properties, port);
         
-        // Use temporary directory for Ratis internal files (metadata)
-        // Prefer /data (if writable) or /dev/shm (in-memory) or system temp
+        // Use persistent directory for Ratis internal files (metadata)
         File storageDir;
         File dataDir = new File("/data");
-        File shmDir = new File("/dev/shm");
         
-        try {
-            if (dataDir.exists() && dataDir.canWrite()) {
-                storageDir = Files.createTempDirectory(dataDir.toPath(), "smq-raft-" + nodeId + "-").toFile();
-            } else if (shmDir.exists() && shmDir.canWrite()) {
-                storageDir = Files.createTempDirectory(shmDir.toPath(), "smq-raft-" + nodeId + "-").toFile();
-            } else {
-                storageDir = Files.createTempDirectory("smq-raft-" + nodeId + "-").toFile();
-            }
-        } catch (IOException e) {
-            LOG.error("Failed to create temporary Raft storage directory", e);
-            // Last resort fallback
-            storageDir = new File("/tmp/smq-raft-" + nodeId + "-" + System.currentTimeMillis());
+        if (dataDir.exists() && dataDir.canWrite()) {
+            storageDir = new File(dataDir, "raft-" + nodeId);
+        } else {
+            // Use a stable temporary directory for the node
+            storageDir = new File(System.getProperty("java.io.tmpdir"), "smq-raft-" + nodeId);
+        }
+        
+        if (!storageDir.exists()) {
             storageDir.mkdirs();
         }
 
@@ -103,11 +98,9 @@ public class RaftService {
 
         RaftServerConfigKeys.setStorageDir(properties, Collections.singletonList(storageDir));
 
-        // Restore metadata from SQLite if it exists
-        restoreMetadataFromSQLite(storageDir, peerId);
-
-        // Use RECOVER to pick up restored metadata, or it will behave like FORMAT if empty
-        RaftStorage.StartupOption startupOption = RaftStorage.StartupOption.RECOVER;
+        // Use RECOVER for production (/data), otherwise FORMAT (tests/local)
+        RaftStorage.StartupOption startupOption = (dataDir.exists() && dataDir.canWrite()) ? 
+                RaftStorage.StartupOption.RECOVER : RaftStorage.StartupOption.FORMAT;
 
         raftServer = RaftServer.newBuilder()
                 .setServerId(peerId)
@@ -133,31 +126,6 @@ public class RaftService {
         
         // Start periodic metadata sync and leadership logging
         startSyncAndLogging();
-    }
-
-    private void restoreMetadataFromSQLite(File storageDir, RaftPeerId peerId) {
-        try {
-            QuarkusTransaction.requiringNew().run(() -> {
-                RaftMetadata metadata = RaftMetadata.findById(nodeId);
-                if (metadata != null) {
-                    LOG.infof("Restoring Raft metadata from SQLite: term=%d, votedFor=%s", metadata.currentTerm, metadata.votedFor);
-                    File groupDir = new File(storageDir, groupId.getUuid().toString());
-                    File currentDir = new File(groupDir, "current");
-                    if (!currentDir.exists()) {
-                        currentDir.mkdirs();
-                    }
-                    File metaFile = new File(currentDir, "raft-meta");
-                    try (PrintWriter writer = new PrintWriter(metaFile)) {
-                        writer.println("term=" + metadata.currentTerm);
-                        writer.println("votedFor=" + (metadata.votedFor != null ? metadata.votedFor : ""));
-                    } catch (IOException e) {
-                        LOG.error("Failed to restore raft-meta file", e);
-                    }
-                }
-            });
-        } catch (Exception e) {
-            LOG.error("Failed to restore metadata from SQLite", e);
-        }
     }
 
     private void startSyncAndLogging() {
@@ -339,18 +307,69 @@ public class RaftService {
     }
 
     public boolean replicateMessage(io.dist.model.Message msg) {
+        String encodedPayload = Base64.getEncoder().encodeToString(msg.payload.getBytes(StandardCharsets.UTF_8));
+        String encodedRoutingKey = msg.routingKey == null ? "null" : Base64.getEncoder().encodeToString(msg.routingKey.getBytes(StandardCharsets.UTF_8));
+        return sendCommand(String.format("PUBLISH|%s|%s|%s|%s|%s|%s",
+                msg.id, encodedPayload, encodedRoutingKey, msg.exchange, msg.queueName, msg.timestamp.toString()));
+    }
+
+    public boolean replicatePoll(String queueName, String messageId) {
+        return sendCommand(String.format("POLL|%s|%s", queueName, messageId));
+    }
+
+    public boolean replicateAck(String messageId) {
+        return sendCommand(String.format("ACK|%s", messageId));
+    }
+
+    public boolean replicateNack(String messageId, boolean requeue) {
+        return sendCommand(String.format("NACK|%s|%b", messageId, requeue));
+    }
+
+    public boolean replicateCreateExchange(String name, String type, boolean durable) {
+        return sendCommand(String.format("CREATE_EXCHANGE|%s|%s|%b", name, type, durable));
+    }
+
+    public boolean replicateDeleteExchange(String name) {
+        return sendCommand(String.format("DELETE_EXCHANGE|%s", name));
+    }
+
+    public boolean replicateCreateQueue(String name, String group, boolean durable, boolean autoDelete) {
+        return sendCommand(String.format("CREATE_QUEUE|%s|%s|%b|%b", name, group, durable, autoDelete));
+    }
+
+    public boolean replicateDeleteQueue(String name) {
+        return sendCommand(String.format("DELETE_QUEUE|%s", name));
+    }
+
+    public boolean replicateBind(String exchangeName, String queueName, String routingKey) {
+        String encodedRoutingKey = routingKey == null ? "null" : Base64.getEncoder().encodeToString(routingKey.getBytes(StandardCharsets.UTF_8));
+        return sendCommand(String.format("BIND|%s|%s|%s", exchangeName, queueName, encodedRoutingKey));
+    }
+
+    public boolean replicateUnbind(String exchangeName, String queueName, String routingKey) {
+        String encodedRoutingKey = routingKey == null ? "null" : Base64.getEncoder().encodeToString(routingKey.getBytes(StandardCharsets.UTF_8));
+        return sendCommand(String.format("UNBIND|%s|%s|%s", exchangeName, queueName, encodedRoutingKey));
+    }
+
+    private boolean sendCommand(String command) {
         if (sharedClient == null) {
             LOG.error("Raft shared client is not initialized");
             return false;
         }
-        String command = String.format("PUBLISH|%s|%s|%s|%s|%s|%s",
-                msg.id, msg.payload, msg.routingKey, msg.exchange, msg.queueName, msg.timestamp.toString());
-
         try {
             RaftClientReply reply = sharedClient.io().send(org.apache.ratis.protocol.Message.valueOf(command));
-            return reply.isSuccess();
+            if (!reply.isSuccess()) {
+                LOG.errorf("Raft command failed (not committed): %s, reply: %s", command, reply);
+                return false;
+            }
+            String response = reply.getMessage().getContent().toString(StandardCharsets.UTF_8);
+            if (!response.equals("SUCCESS")) {
+                LOG.errorf("Raft command execution failed in state machine: %s, response: %s", command, response);
+                return false;
+            }
+            return true;
         } catch (IOException e) {
-            LOG.error("Failed to replicate message", e);
+            LOG.error("Failed to send Raft command: " + command, e);
             return false;
         }
     }
