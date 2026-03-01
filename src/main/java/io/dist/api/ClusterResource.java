@@ -1,6 +1,7 @@
 package io.dist.api;
 
 import io.dist.cluster.RaftService;
+import io.smallrye.mutiny.Uni;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -39,23 +40,27 @@ public class ClusterResource {
 
     @POST
     @Path("/join")
-    public Response joinCluster(@QueryParam("id") String id, @QueryParam("address") String address) {
-        boolean success = raftService.addPeer(id, address);
-        if (success) {
-            return Response.ok("Node " + id + " joined cluster").build();
-        } else {
-            return Response.status(Response.Status.BAD_REQUEST).entity("Failed to join cluster. Ensure you are calling the LEADER.").build();
-        }
+    public Uni<Response> joinCluster(@QueryParam("id") String id, @QueryParam("address") String address) {
+        return raftService.addPeer(id, address)
+                .map(success -> {
+                    if (success) {
+                        return Response.ok("Node " + id + " joined cluster").build();
+                    } else {
+                        return Response.status(Response.Status.BAD_REQUEST).entity("Failed to join cluster. Ensure you are calling the LEADER.").build();
+                    }
+                });
     }
 
     @POST
     @Path("/leave")
-    public Response leaveCluster(@QueryParam("id") String id) {
-        boolean success = raftService.removePeer(id);
-        if (success) {
-            return Response.ok("Node " + id + " left cluster").build();
-        } else {
-            return Response.status(Response.Status.BAD_REQUEST).entity("Failed to leave cluster. Ensure you are calling the LEADER.").build();
-        }
+    public Uni<Response> leaveCluster(@QueryParam("id") String id) {
+        return raftService.removePeer(id)
+                .map(success -> {
+                    if (success) {
+                        return Response.ok("Node " + id + " left cluster").build();
+                    } else {
+                        return Response.status(Response.Status.BAD_REQUEST).entity("Failed to leave cluster. Ensure you are calling the LEADER.").build();
+                    }
+                });
     }
 }

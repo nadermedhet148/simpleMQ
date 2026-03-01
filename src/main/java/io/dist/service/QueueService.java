@@ -4,6 +4,8 @@ import io.dist.model.Binding;
 import io.dist.model.Exchange;
 import io.dist.model.ExchangeType;
 import io.dist.model.Queue;
+import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -15,15 +17,15 @@ public class QueueService {
     @Inject
     io.dist.cluster.RaftService raftService;
 
-    @Transactional
-    public void createExchange(String name, ExchangeType type, boolean durable) {
+    public Uni<Void> createExchange(String name, ExchangeType type, boolean durable) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        boolean success = raftService.replicateCreateExchange(name, type.name(), durable);
-        if (!success) {
-            throw new RuntimeException("Failed to replicate exchange creation");
-        }
+        return raftService.replicateCreateExchange(name, type.name(), durable)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate exchange creation"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     @Transactional
@@ -33,15 +35,15 @@ public class QueueService {
         }
     }
 
-    @Transactional
-    public void deleteExchange(String name) {
+    public Uni<Void> deleteExchange(String name) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        boolean success = raftService.replicateDeleteExchange(name);
-        if (!success) {
-            throw new RuntimeException("Failed to replicate exchange deletion");
-        }
+        return raftService.replicateDeleteExchange(name)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate exchange deletion"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     @Transactional
@@ -50,15 +52,15 @@ public class QueueService {
         Binding.delete("exchangeName", name);
     }
 
-    @Transactional
-    public void createQueue(String name, String group, boolean durable, boolean autoDelete) {
+    public Uni<Void> createQueue(String name, String group, boolean durable, boolean autoDelete) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        boolean success = raftService.replicateCreateQueue(name, group, durable, autoDelete);
-        if (!success) {
-            throw new RuntimeException("Failed to replicate queue creation");
-        }
+        return raftService.replicateCreateQueue(name, group, durable, autoDelete)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate queue creation"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     @Transactional
@@ -68,15 +70,15 @@ public class QueueService {
         }
     }
 
-    @Transactional
-    public void deleteQueue(String name) {
+    public Uni<Void> deleteQueue(String name) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        boolean success = raftService.replicateDeleteQueue(name);
-        if (!success) {
-            throw new RuntimeException("Failed to replicate queue deletion");
-        }
+        return raftService.replicateDeleteQueue(name)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate queue deletion"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     @Transactional
@@ -85,15 +87,15 @@ public class QueueService {
         Binding.delete("queueName", name);
     }
 
-    @Transactional
-    public void bind(String exchangeName, String queueName, String routingKey) {
+    public Uni<Void> bind(String exchangeName, String queueName, String routingKey) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        boolean success = raftService.replicateBind(exchangeName, queueName, routingKey);
-        if (!success) {
-            throw new RuntimeException("Failed to replicate binding");
-        }
+        return raftService.replicateBind(exchangeName, queueName, routingKey)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate binding"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     @Transactional
@@ -104,15 +106,15 @@ public class QueueService {
         }
     }
 
-    @Transactional
-    public void unbind(String exchangeName, String queueName, String routingKey) {
+    public Uni<Void> unbind(String exchangeName, String queueName, String routingKey) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        boolean success = raftService.replicateUnbind(exchangeName, queueName, routingKey);
-        if (!success) {
-            throw new RuntimeException("Failed to replicate unbinding");
-        }
+        return raftService.replicateUnbind(exchangeName, queueName, routingKey)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate unbinding"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     @Transactional
@@ -120,19 +122,23 @@ public class QueueService {
         Binding.delete("exchangeName = ?1 and queueName = ?2 and (routingKey = ?3 or (routingKey is null and (?3 is null or ?3 = '')))", exchangeName, queueName, routingKey);
     }
 
-    public List<Queue> listQueues() {
-        return Queue.listAll();
+    public Uni<List<Queue>> listQueues() {
+        return Uni.createFrom().item(() -> (List<Queue>)(List<?>)Queue.listAll())
+                .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
     
-    public List<Queue> listQueuesInGroup(String group) {
-        return Queue.find("queueGroup", group).list();
+    public Uni<List<Queue>> listQueuesInGroup(String group) {
+        return Uni.createFrom().item(() -> (List<Queue>)(List<?>)Queue.find("queueGroup", group).list())
+                .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 
-    public List<Exchange> listExchanges() {
-        return Exchange.listAll();
+    public Uni<List<Exchange>> listExchanges() {
+        return Uni.createFrom().item(() -> (List<Exchange>)(List<?>)Exchange.listAll())
+                .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 
-    public List<Binding> listBindings() {
-        return Binding.listAll();
+    public Uni<List<Binding>> listBindings() {
+        return Uni.createFrom().item(() -> (List<Binding>)(List<?>)Binding.listAll())
+                .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 }

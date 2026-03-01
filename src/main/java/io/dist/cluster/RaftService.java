@@ -1,5 +1,7 @@
 package io.dist.cluster;
 
+import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import io.dist.model.RaftMetadata;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.runtime.ShutdownEvent;
@@ -11,6 +13,8 @@ import org.apache.ratis.client.RaftClient;
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.grpc.GrpcConfigKeys;
 import org.apache.ratis.protocol.*;
+import org.apache.ratis.retry.RetryPolicies;
+import org.apache.ratis.util.TimeDuration;
 import org.apache.ratis.server.RaftServer;
 import org.apache.ratis.server.RaftServerConfigKeys;
 import org.apache.ratis.server.storage.RaftStorage;
@@ -85,10 +89,15 @@ public class RaftService {
         if (dataDir.exists() && dataDir.canWrite()) {
             storageDir = new File(dataDir, "raft-" + nodeId);
         } else {
-            // Use a stable temporary directory for the node
+            // Use a stable temporary directory for the node.
+            // Clean any leftover content first so FORMAT always starts fresh.
             storageDir = new File(System.getProperty("java.io.tmpdir"), "smq-raft-" + nodeId);
+            if (storageDir.exists()) {
+                LOG.infof("Cleaning stale Raft temp dir before FORMAT: %s", storageDir.getAbsolutePath());
+                deleteDirectory(storageDir);
+            }
         }
-        
+
         if (!storageDir.exists()) {
             storageDir.mkdirs();
         }
@@ -117,11 +126,7 @@ public class RaftService {
         raftServer.start();
         LOG.infof("Raft server %s started successfully", nodeId);
 
-        this.sharedClient = RaftClient.newBuilder()
-                .setProperties(new RaftProperties())
-                .setRaftGroup(raftGroup)
-                .build();
-        
+        this.sharedClient = buildClient(raftGroup);
         LOG.infof("Raft shared client initialized for node %s", nodeId);
         
         // Start periodic metadata sync and leadership logging
@@ -183,8 +188,13 @@ public class RaftService {
         if (raftServer != null) {
             raftServer.close();
         }
-        
-        if (currentStorageDir != null && currentStorageDir.exists()) {
+
+        // In Docker, /data is mounted and uses RECOVER mode — preserve it.
+        // In tests/local, /tmp is used with FORMAT mode — clean up so the next
+        // run can FORMAT a fresh directory without "existing directories found" errors.
+        File dataDir = new File("/data");
+        if (currentStorageDir != null && currentStorageDir.exists()
+                && !(dataDir.exists() && dataDir.canWrite())) {
             try {
                 LOG.infof("Cleaning up temporary Raft storage directory: %s", currentStorageDir.getAbsolutePath());
                 deleteDirectory(currentStorageDir);
@@ -244,9 +254,9 @@ public class RaftService {
         return new ArrayList<>(raftGroup.getPeers());
     }
 
-    public boolean addPeer(String id, String address) {
+    public Uni<Boolean> addPeer(String id, String address) {
         if (!isLeader()) {
-            return false;
+            return Uni.createFrom().item(false);
         }
 
         RaftPeer newPeer = RaftPeer.newBuilder()
@@ -256,16 +266,16 @@ public class RaftService {
 
         List<RaftPeer> currentPeers = new ArrayList<>(raftGroup.getPeers());
         if (currentPeers.stream().anyMatch(p -> p.getId().toString().equals(id))) {
-            return true; // Already joined
+            return Uni.createFrom().item(true); // Already joined
         }
         currentPeers.add(newPeer);
 
         return setConfiguration(currentPeers);
     }
 
-    public boolean removePeer(String id) {
+    public Uni<Boolean> removePeer(String id) {
         if (!isLeader()) {
-            return false;
+            return Uni.createFrom().item(false);
         }
 
         List<RaftPeer> currentPeers = new ArrayList<>(raftGroup.getPeers());
@@ -274,103 +284,122 @@ public class RaftService {
                 .collect(Collectors.toList());
 
         if (currentPeers.size() == newPeers.size()) {
-            return true; // Already gone
+            return Uni.createFrom().item(true); // Already gone
         }
 
         return setConfiguration(newPeers);
     }
 
-    private boolean setConfiguration(List<RaftPeer> newPeers) {
+    private Uni<Boolean> setConfiguration(List<RaftPeer> newPeers) {
         if (sharedClient == null) {
             LOG.error("Raft shared client is not initialized");
-            return false;
+            return Uni.createFrom().item(false);
         }
         LOG.infof("Setting new Raft configuration: %s", newPeers);
-        try {
-            RaftClientReply reply = sharedClient.admin().setConfiguration(newPeers);
-            LOG.infof("Raft setConfiguration reply: %s", reply);
-            if (reply.isSuccess()) {
-                this.raftGroup = RaftGroup.valueOf(groupId, newPeers);
-                // Update shared client with new group
-                this.sharedClient.close();
-                this.sharedClient = RaftClient.newBuilder()
-                        .setProperties(new RaftProperties())
-                        .setRaftGroup(raftGroup)
-                        .build();
-                return true;
+        return Uni.createFrom().item(() -> {
+            try {
+                RaftClientReply reply = sharedClient.admin().setConfiguration(newPeers);
+                LOG.infof("Raft setConfiguration reply: %s", reply);
+                if (reply.isSuccess()) {
+                    this.raftGroup = RaftGroup.valueOf(groupId, newPeers);
+                    // Update shared client with new group
+                    try {
+                        this.sharedClient.close();
+                    } catch (IOException e) {
+                        LOG.error("Failed to close client", e);
+                    }
+                    this.sharedClient = buildClient(raftGroup);
+                    return true;
+                }
+                return false;
+            } catch (IOException e) {
+                LOG.error("Failed to update cluster configuration", e);
+                return false;
             }
-            return false;
-        } catch (IOException e) {
-            LOG.error("Failed to update cluster configuration", e);
-            return false;
-        }
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 
-    public boolean replicateMessage(io.dist.model.Message msg) {
+    public Uni<Boolean> replicateMessage(io.dist.model.Message msg) {
         String encodedPayload = Base64.getEncoder().encodeToString(msg.payload.getBytes(StandardCharsets.UTF_8));
         String encodedRoutingKey = msg.routingKey == null ? "null" : Base64.getEncoder().encodeToString(msg.routingKey.getBytes(StandardCharsets.UTF_8));
         return sendCommand(String.format("PUBLISH|%s|%s|%s|%s|%s|%s",
                 msg.id, encodedPayload, encodedRoutingKey, msg.exchange, msg.queueName, msg.timestamp.toString()));
     }
 
-    public boolean replicatePoll(String queueName, String messageId) {
+    public Uni<Boolean> replicatePoll(String queueName, String messageId) {
         return sendCommand(String.format("POLL|%s|%s", queueName, messageId));
     }
 
-    public boolean replicateAck(String messageId) {
+    public Uni<Boolean> replicateAck(String messageId) {
         return sendCommand(String.format("ACK|%s", messageId));
     }
 
-    public boolean replicateNack(String messageId, boolean requeue) {
+    public Uni<Boolean> replicateNack(String messageId, boolean requeue) {
         return sendCommand(String.format("NACK|%s|%b", messageId, requeue));
     }
 
-    public boolean replicateCreateExchange(String name, String type, boolean durable) {
+    public Uni<Boolean> replicateCreateExchange(String name, String type, boolean durable) {
         return sendCommand(String.format("CREATE_EXCHANGE|%s|%s|%b", name, type, durable));
     }
 
-    public boolean replicateDeleteExchange(String name) {
+    public Uni<Boolean> replicateDeleteExchange(String name) {
         return sendCommand(String.format("DELETE_EXCHANGE|%s", name));
     }
 
-    public boolean replicateCreateQueue(String name, String group, boolean durable, boolean autoDelete) {
+    public Uni<Boolean> replicateCreateQueue(String name, String group, boolean durable, boolean autoDelete) {
         return sendCommand(String.format("CREATE_QUEUE|%s|%s|%b|%b", name, group, durable, autoDelete));
     }
 
-    public boolean replicateDeleteQueue(String name) {
+    public Uni<Boolean> replicateDeleteQueue(String name) {
         return sendCommand(String.format("DELETE_QUEUE|%s", name));
     }
 
-    public boolean replicateBind(String exchangeName, String queueName, String routingKey) {
+    public Uni<Boolean> replicateBind(String exchangeName, String queueName, String routingKey) {
         String encodedRoutingKey = routingKey == null ? "null" : Base64.getEncoder().encodeToString(routingKey.getBytes(StandardCharsets.UTF_8));
         return sendCommand(String.format("BIND|%s|%s|%s", exchangeName, queueName, encodedRoutingKey));
     }
 
-    public boolean replicateUnbind(String exchangeName, String queueName, String routingKey) {
+    public Uni<Boolean> replicateUnbind(String exchangeName, String queueName, String routingKey) {
         String encodedRoutingKey = routingKey == null ? "null" : Base64.getEncoder().encodeToString(routingKey.getBytes(StandardCharsets.UTF_8));
         return sendCommand(String.format("UNBIND|%s|%s|%s", exchangeName, queueName, encodedRoutingKey));
     }
 
-    private boolean sendCommand(String command) {
+    private Uni<Boolean> sendCommand(String command) {
         if (sharedClient == null) {
             LOG.error("Raft shared client is not initialized");
-            return false;
+            return Uni.createFrom().item(false);
         }
-        try {
-            RaftClientReply reply = sharedClient.io().send(org.apache.ratis.protocol.Message.valueOf(command));
-            if (!reply.isSuccess()) {
-                LOG.errorf("Raft command failed (not committed): %s, reply: %s", command, reply);
+        // Use the blocking io() API (which handles leader-watch / retry internally)
+        // wrapped in the worker pool so Quarkus reactive threads are never blocked.
+        return Uni.createFrom().item(() -> {
+            try {
+                RaftClientReply reply = sharedClient.io().send(
+                        org.apache.ratis.protocol.Message.valueOf(command));
+                if (!reply.isSuccess()) {
+                    LOG.errorf("Raft command failed: %s, reply: %s", command, reply);
+                    return false;
+                }
+                String response = reply.getMessage().getContent().toString(StandardCharsets.UTF_8);
+                if (!response.equals("SUCCESS")) {
+                    LOG.errorf("Raft state-machine rejected command: %s, response: %s", command, response);
+                    return false;
+                }
+                return true;
+            } catch (IOException e) {
+                LOG.error("Failed to send Raft command: " + command, e);
                 return false;
             }
-            String response = reply.getMessage().getContent().toString(StandardCharsets.UTF_8);
-            if (!response.equals("SUCCESS")) {
-                LOG.errorf("Raft command execution failed in state machine: %s, response: %s", command, response);
-                return false;
-            }
-            return true;
-        } catch (IOException e) {
-            LOG.error("Failed to send Raft command: " + command, e);
-            return false;
-        }
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+    }
+
+    private RaftClient buildClient(RaftGroup group) {
+        // Retry up to 10 times with 1s sleep → gives up after ~10s instead of retrying forever.
+        // This prevents worker-pool saturation when a command gets stuck after a leader election.
+        return RaftClient.newBuilder()
+                .setProperties(new RaftProperties())
+                .setRaftGroup(group)
+                .setRetryPolicy(RetryPolicies.retryUpToMaximumCountWithFixedSleep(
+                        10, TimeDuration.valueOf(1, java.util.concurrent.TimeUnit.SECONDS)))
+                .build();
     }
 }

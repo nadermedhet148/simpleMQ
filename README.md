@@ -1,6 +1,29 @@
 # simplemq - Simple Message Broker Design Plan
 
-A lightweight message broker built with Java Quarkus, supporting both in-memory and disk-based storage, clustering with Raft, and a management UI.
+`simpleMQ` is a lightweight, distributed message broker built with Java 21 and the Quarkus framework. It is designed for high performance, durability, and high availability, featuring a hybrid storage model (in-memory + SQLite) and clustering powered by the Raft consensus algorithm.
+
+## Architecture Overview
+
+The system is built as a set of decoupled components working together to provide a robust messaging infrastructure:
+
+1.  **REST API Layer (`io.dist.api`)**: The gateway for producers and consumers. It handles management (exchanges/queues), message publishing, and polling.
+2.  **Messaging Engine (`io.dist.service`)**: The core logic that orchestrates message routing between exchanges and queues.
+3.  **Clustering Service (`io.dist.cluster`)**: Implements the Raft consensus algorithm (via Apache Ratis) to ensure data consistency and leader election across a multi-node cluster.
+4.  **Storage Engine (`io.dist.storage`)**: A hybrid model that keeps active messages in memory for speed while persisting them to a SQLite database for durability.
+5.  **Routing Engine (`io.dist.routing`)**: Pluggable strategies for `Direct` (routing-key based) and `Fanout` (broadcast) message distribution.
+
+## How It Works
+
+### 1. Message Lifecycle
+*   **Publishing**: A message is sent to an **Exchange**. The `MessagingEngine` determines which **Queues** it belongs to based on **Bindings** and the exchange's **Routing Strategy**.
+*   **Replication**: Before a message is accepted, it is replicated to a quorum of nodes via the Raft protocol, ensuring it survives node failures.
+*   **Consumption**: Consumers use a **Pull API** to retrieve messages from assigned queues.
+*   **Acknowledgment**: Messages must be acknowledged (`ACK`) to be removed from the system. If a message fails (`NACK`) or times out, it is either retried or moved to a **Dead Letter Queue (DLQ)**.
+
+### 2. High Availability & Clustering
+*   **Leader Election**: Nodes automatically elect a leader using Raft. Only the leader handles write operations (publishing, queue creation).
+*   **Transparent Proxying**: If a request hits a follower node, the `LeaderProxyFilter` automatically forwards it to the current leader. The client doesn't need to know who the leader is.
+*   **State Consistency**: All metadata (exchanges, queues, bindings) and message states are replicated, so any node can take over if the leader fails.
 
 ## Features & Requirements
 
@@ -83,13 +106,18 @@ docker-compose logs -f | grep "LEADER"
 ```
 
 ### 6. Management UI
-- [ ] **Dashboard Development**: Create a simple UI to list exchanges, monitor queue depths, and view DLQ status.
-- [ ] **API Integration**: Connect the UI to the Management REST APIs.
+- [x] **Dashboard Development**: A comprehensive web-based management console to visualize and manage exchanges, queues, and message flow.
+- [x] **API Integration**: Real-time integration with Management, Metrics, and Cluster REST APIs.
+- [x] **Features**:
+    - **Resource Management**: Create/Delete exchanges, queues, and bindings.
+    - **Live Metrics**: Real-time stats for published, acked, nacked, and DLQ messages.
+    - **Messaging Tools**: Built-in tools to publish messages and manually poll/ack messages from queues.
+    - **Cluster Visualization**: View cluster nodes and manage membership (Join/Leave).
 
 ### 7. Testing & Quality Assurance
-- [ ] **Unit Testing**: Test routing logic and individual component behavior.
-- [ ] **Integration Testing**: Test API endpoints with an embedded SQLite database.
-- [ ] **E2E Testing**: Simulate a multi-node cluster to verify leader election and failover scenarios.
+- [x] **Unit Testing**: Test routing logic and individual component behavior.
+- [x] **Integration Testing**: Test API endpoints with an embedded SQLite database.
+- [x] **E2E Testing**: Simulate a multi-node cluster to verify leader election and failover scenarios.
 
 #### Load Testing Tool
 A Node.js script `load_test.js` is provided to simulate producer and consumer activity.

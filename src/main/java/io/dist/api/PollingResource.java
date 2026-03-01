@@ -1,6 +1,7 @@
 package io.dist.api;
 
 import io.dist.model.Message;
+import io.smallrye.mutiny.Uni;
 import io.dist.service.MessagingEngine;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -16,25 +17,27 @@ public class PollingResource {
 
     @GET
     @Path("/{queue}")
-    public Response poll(@PathParam("queue") String queue) {
-        Message msg = messagingEngine.poll(queue);
-        if (msg == null) {
-            return Response.status(Response.Status.NO_CONTENT).build();
-        }
-        return Response.ok(msg).build();
+    public Uni<Response> poll(@PathParam("queue") String queue) {
+        return messagingEngine.poll(queue)
+                .map(msg -> {
+                    if (msg == null) {
+                        return Response.status(Response.Status.NO_CONTENT).build();
+                    }
+                    return Response.ok(msg).build();
+                });
     }
 
     @POST
     @Path("/ack/{messageId}")
-    public Response acknowledge(@PathParam("messageId") String messageId) {
-        messagingEngine.acknowledgeMessage(messageId);
-        return Response.ok().build();
+    public Uni<Response> acknowledge(@PathParam("messageId") String messageId) {
+        return messagingEngine.acknowledgeMessage(messageId)
+                .replaceWith(Response.ok().build());
     }
 
     @POST
     @Path("/nack/{messageId}")
-    public Response nack(@PathParam("messageId") String messageId, @QueryParam("requeue") @DefaultValue("true") boolean requeue) {
-        messagingEngine.nackMessage(messageId, requeue);
-        return Response.ok().build();
+    public Uni<Response> nack(@PathParam("messageId") String messageId, @QueryParam("requeue") @DefaultValue("true") boolean requeue) {
+        return messagingEngine.nackMessage(messageId, requeue)
+                .replaceWith(Response.ok().build());
     }
 }

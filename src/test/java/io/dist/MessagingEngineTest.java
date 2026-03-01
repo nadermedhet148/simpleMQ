@@ -46,28 +46,28 @@ public class MessagingEngineTest {
     @Test
     void testDirectRoutingAndFlow() {
         // Setup: Exchange, Queues and Bindings
-        queueService.createExchange("direct-ex", ExchangeType.DIRECT, true);
-        queueService.createQueue("q1", "group1", true, false);
-        queueService.createQueue("q2", "group1", true, false);
-        queueService.bind("direct-ex", "q1", "key1");
-        queueService.bind("direct-ex", "q2", "key2");
+        queueService.createExchange("direct-ex", ExchangeType.DIRECT, true).await().indefinitely();
+        queueService.createQueue("q1", "group1", true, false).await().indefinitely();
+        queueService.createQueue("q2", "group1", true, false).await().indefinitely();
+        queueService.bind("direct-ex", "q1", "key1").await().indefinitely();
+        queueService.bind("direct-ex", "q2", "key2").await().indefinitely();
 
         // 1. Publish to key1
-        messagingEngine.publish("direct-ex", "key1", "hello q1");
+        messagingEngine.publish("direct-ex", "key1", "hello q1").await().indefinitely();
 
         // 2. Verify it's in q1 and not in q2
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> storageService.getBuffer("q1").size() > 0);
         
-        Message m1 = messagingEngine.poll("q1");
+        Message m1 = messagingEngine.poll("q1").await().indefinitely();
         assertNotNull(m1);
         assertEquals("hello q1", m1.payload);
         assertEquals(MessageStatus.DELIVERED, m1.status);
 
-        assertNull(messagingEngine.poll("q2"));
+        assertNull(messagingEngine.poll("q2").await().indefinitely());
 
         // 3. Acknowledge m1
-        messagingEngine.acknowledgeMessage(m1.id);
+        messagingEngine.acknowledgeMessage(m1.id).await().indefinitely();
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> getMessage(m1.id).status == MessageStatus.ACKED);
     }
@@ -75,51 +75,51 @@ public class MessagingEngineTest {
     @Test
     void testFanoutRouting() {
         // Setup: Fanout Exchange
-        queueService.createExchange("fanout-ex", ExchangeType.FANOUT, true);
-        queueService.createQueue("fq1", "group1", true, false);
-        queueService.createQueue("fq2", "group1", true, false);
-        queueService.bind("fanout-ex", "fq1", null);
-        queueService.bind("fanout-ex", "fq2", null);
+        queueService.createExchange("fanout-ex", ExchangeType.FANOUT, true).await().indefinitely();
+        queueService.createQueue("fq1", "group1", true, false).await().indefinitely();
+        queueService.createQueue("fq2", "group1", true, false).await().indefinitely();
+        queueService.bind("fanout-ex", "fq1", null).await().indefinitely();
+        queueService.bind("fanout-ex", "fq2", null).await().indefinitely();
 
         // 1. Publish
-        messagingEngine.publish("fanout-ex", "any-key", "broadcast");
+        messagingEngine.publish("fanout-ex", "any-key", "broadcast").await().indefinitely();
 
         // 2. Verify both queues got it
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> storageService.getBuffer("fq1").size() > 0 && storageService.getBuffer("fq2").size() > 0);
         
-        Message m1 = messagingEngine.poll("fq1");
+        Message m1 = messagingEngine.poll("fq1").await().indefinitely();
         assertNotNull(m1);
         assertEquals("broadcast", m1.payload);
 
-        Message m2 = messagingEngine.poll("fq2");
+        Message m2 = messagingEngine.poll("fq2").await().indefinitely();
         assertNotNull(m2);
         assertEquals("broadcast", m2.payload);
     }
 
     @Test
     void testNackWithRequeue() {
-        queueService.createExchange("ex-nack", ExchangeType.DIRECT, true);
-        queueService.createQueue("qn", "group1", true, false);
-        queueService.bind("ex-nack", "qn", "k");
+        queueService.createExchange("ex-nack", ExchangeType.DIRECT, true).await().indefinitely();
+        queueService.createQueue("qn", "group1", true, false).await().indefinitely();
+        queueService.bind("ex-nack", "qn", "k").await().indefinitely();
 
-        messagingEngine.publish("ex-nack", "k", "nack-me");
+        messagingEngine.publish("ex-nack", "k", "nack-me").await().indefinitely();
         
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> storageService.getBuffer("qn").size() > 0);
         
-        Message m = messagingEngine.poll("qn");
+        Message m = messagingEngine.poll("qn").await().indefinitely();
         assertNotNull(m);
         assertEquals(1, m.deliveryCount);
 
         // Nack with requeue
-        messagingEngine.nackMessage(m.id, true);
+        messagingEngine.nackMessage(m.id, true).await().indefinitely();
         
         // Should be back in memory and status PENDING in DB
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> getMessage(m.id).status == MessageStatus.PENDING);
 
-        Message m2 = messagingEngine.poll("qn");
+        Message m2 = messagingEngine.poll("qn").await().indefinitely();
         assertNotNull(m2);
         assertEquals(m.id, m2.id);
         assertEquals(2, m2.deliveryCount);
@@ -127,11 +127,11 @@ public class MessagingEngineTest {
 
     @Test
     void testDLQWorkflow() {
-        queueService.createExchange("ex-dlq", ExchangeType.DIRECT, true);
-        queueService.createQueue("qd", "group1", true, false);
-        queueService.bind("ex-dlq", "qd", "k");
+        queueService.createExchange("ex-dlq", ExchangeType.DIRECT, true).await().indefinitely();
+        queueService.createQueue("qd", "group1", true, false).await().indefinitely();
+        queueService.bind("ex-dlq", "qd", "k").await().indefinitely();
 
-        messagingEngine.publish("ex-dlq", "k", "dlq-me");
+        messagingEngine.publish("ex-dlq", "k", "dlq-me").await().indefinitely();
         
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> storageService.getBuffer("qd").size() > 0);
@@ -139,14 +139,14 @@ public class MessagingEngineTest {
         // Simulate 3 failed attempts
         String lastMsgId = null;
         for (int i = 0; i < 3; i++) {
-            Message m = messagingEngine.poll("qd");
+            Message m = messagingEngine.poll("qd").await().indefinitely();
             assertNotNull(m);
             lastMsgId = m.id;
-            messagingEngine.nackMessage(m.id, true);
+            messagingEngine.nackMessage(m.id, true).await().indefinitely();
         }
 
         // 4th poll should find nothing in qd (it went to DLQ after 3rd nack)
-        assertNull(messagingEngine.poll("qd"));
+        assertNull(messagingEngine.poll("qd").await().indefinitely());
 
         // Verify status in DB is DLQ before polling it from DLQ
         final String lastId = lastMsgId;
@@ -161,7 +161,7 @@ public class MessagingEngineTest {
         assertEquals("DLQ.qd", m_in_db.queueName);
 
         // Check DLQ
-        Message m_dlq = messagingEngine.poll("DLQ.qd");
+        Message m_dlq = messagingEngine.poll("DLQ.qd").await().indefinitely();
         assertNotNull(m_dlq);
         assertEquals(MessageStatus.DELIVERED, m_dlq.status); // poll marks it delivered
     }

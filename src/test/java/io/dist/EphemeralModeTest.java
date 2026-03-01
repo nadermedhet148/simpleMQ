@@ -22,7 +22,14 @@ public class EphemeralModeTest {
         public Map<String, String> getConfigOverrides() {
             return Map.of(
                 "simplemq.persistence.enabled", "false",
-                "quarkus.datasource.jdbc.url", "jdbc:sqlite::memory:"
+                "quarkus.datasource.jdbc.url", "jdbc:sqlite::memory:",
+                // Use distinct ports so this profile doesn't conflict with:
+                // - default test profile (Raft 19851, HTTP 18080)
+                // - Docker cluster (Raft 9851-9853, HTTP 8081-8083, NGINX 8080)
+                "quarkus.http.port", "18081",
+                "quarkus.http.test-port", "18081",
+                "simplemq.cluster.address", "localhost:19852",
+                "simplemq.cluster.peers", "node1=localhost:19852"
             );
         }
     }

@@ -11,6 +11,7 @@ import io.dist.service.QueueService;
 import io.dist.model.RaftMetadata;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.inject.spi.CDI;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.statemachine.TransactionContext;
 import org.apache.ratis.statemachine.impl.BaseStateMachine;
@@ -24,6 +25,18 @@ import java.util.concurrent.CompletableFuture;
 
 public class SimpleStateMachine extends BaseStateMachine {
     private static final Logger LOG = Logger.getLogger(SimpleStateMachine.class);
+
+    // Single-threaded executor so all state-machine DB writes are serialized.
+    // Multiple applyTransaction() calls running concurrently on the worker pool
+    // cause SQLite "database is locked" errors because SQLite only allows one
+    // write transaction at a time.
+    private static final java.util.concurrent.ExecutorService SM_EXECUTOR =
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "raft-sm-executor");
+            t.setDaemon(true);
+            return t;
+        });
+
     private String nodeId;
 
     public SimpleStateMachine() {
@@ -78,71 +91,72 @@ public class SimpleStateMachine extends BaseStateMachine {
 
     @Override
     public CompletableFuture<org.apache.ratis.protocol.Message> applyTransaction(TransactionContext trx) {
-        final long index = trx.getLogEntry().getIndex();
-        final long term = trx.getLogEntry().getTerm();
-        final String command = trx.getLogEntry().getStateMachineLogEntry().getLogData().toString(StandardCharsets.UTF_8);
-        LOG.infof("Applying transaction: %s at index %d", command, index);
+        return CompletableFuture.supplyAsync(() -> {
+            final long index = trx.getLogEntry().getIndex();
+            final long term = trx.getLogEntry().getTerm();
+            final String command = trx.getLogEntry().getStateMachineLogEntry().getLogData().toString(StandardCharsets.UTF_8);
+            LOG.infof("Applying transaction: %s at index %d (Thread: %s)", command, index, Thread.currentThread().getName());
 
-        try {
-            String[] parts = command.split("\\|", -1);
-            String type = parts[0];
-            
-            if (type.equals("PUBLISH")) {
-                Message msg = new Message();
-                msg.id = parts[1];
-                msg.payload = decodeValue(parts[2]);
-                msg.routingKey = decodeValue(parts[3]);
-                msg.exchange = parts[4];
-                msg.queueName = parts[5];
-                msg.timestamp = LocalDateTime.parse(parts[6]);
-                msg.deliveryCount = 0;
-                msg.status = MessageStatus.PENDING;
+            try {
+                String[] parts = command.split("\\|", -1);
+                String type = parts[0];
+                
+                if (type.equals("PUBLISH")) {
+                    Message msg = new Message();
+                    msg.id = parts[1];
+                    msg.payload = decodeValue(parts[2]);
+                    msg.routingKey = decodeValue(parts[3]);
+                    msg.exchange = parts[4];
+                    msg.queueName = parts[5];
+                    msg.timestamp = LocalDateTime.parse(parts[6]);
+                    msg.deliveryCount = 0;
+                    msg.status = MessageStatus.PENDING;
 
-                LOG.infof("Processing message %s for queue %s", msg.id, msg.queueName);
-                getPersistenceManager().saveMessage(msg);
-                getStorageService().getBuffer(msg.queueName).enqueue(msg);
-                getMetricsService().incrementPublished();
-            } else if (type.equals("POLL")) {
-                getMessagingEngine().pollLocal(parts[1], parts[2]);
-            } else if (type.equals("ACK")) {
-                getMessagingEngine().acknowledgeMessageLocal(parts[1]);
-            } else if (type.equals("NACK")) {
-                getMessagingEngine().nackMessageLocal(parts[1], Boolean.parseBoolean(parts[2]));
-                // nackMessageLocal might increment Nacked or DLQ internally, let's check
-            } else if (type.equals("CREATE_EXCHANGE")) {
-                getQueueService().createExchangeLocal(parts[1], ExchangeType.valueOf(parts[2]), Boolean.parseBoolean(parts[3]));
-            } else if (type.equals("DELETE_EXCHANGE")) {
-                getQueueService().deleteExchangeLocal(parts[1]);
-            } else if (type.equals("CREATE_QUEUE")) {
-                getQueueService().createQueueLocal(parts[1], parts[2], Boolean.parseBoolean(parts[3]), Boolean.parseBoolean(parts[4]));
-            } else if (type.equals("DELETE_QUEUE")) {
-                getQueueService().deleteQueueLocal(parts[1]);
-            } else if (type.equals("BIND")) {
-                getQueueService().bindLocal(parts[1], parts[2], decodeValue(parts[3]));
-            } else if (type.equals("UNBIND")) {
-                getQueueService().unbindLocal(parts[1], parts[2], decodeValue(parts[3]));
+                    LOG.infof("Processing message %s for queue %s", msg.id, msg.queueName);
+                    getPersistenceManager().saveMessage(msg);
+                    getStorageService().getBuffer(msg.queueName).enqueue(msg);
+                    getMetricsService().incrementPublished();
+                } else if (type.equals("POLL")) {
+                    getMessagingEngine().pollLocal(parts[1], parts[2]);
+                } else if (type.equals("ACK")) {
+                    getMessagingEngine().acknowledgeMessageLocal(parts[1]);
+                } else if (type.equals("NACK")) {
+                    getMessagingEngine().nackMessageLocal(parts[1], Boolean.parseBoolean(parts[2]));
+                } else if (type.equals("CREATE_EXCHANGE")) {
+                    getQueueService().createExchangeLocal(parts[1], ExchangeType.valueOf(parts[2]), Boolean.parseBoolean(parts[3]));
+                } else if (type.equals("DELETE_EXCHANGE")) {
+                    getQueueService().deleteExchangeLocal(parts[1]);
+                } else if (type.equals("CREATE_QUEUE")) {
+                    getQueueService().createQueueLocal(parts[1], parts[2], Boolean.parseBoolean(parts[3]), Boolean.parseBoolean(parts[4]));
+                } else if (type.equals("DELETE_QUEUE")) {
+                    getQueueService().deleteQueueLocal(parts[1]);
+                } else if (type.equals("BIND")) {
+                    getQueueService().bindLocal(parts[1], parts[2], decodeValue(parts[3]));
+                } else if (type.equals("UNBIND")) {
+                    getQueueService().unbindLocal(parts[1], parts[2], decodeValue(parts[3]));
+                }
+
+                // Update last applied index in RaftMetadata
+                QuarkusTransaction.requiringNew().run(() -> {
+                    RaftMetadata metadata = RaftMetadata.findById(getNodeId());
+                    if (metadata == null) {
+                        metadata = new RaftMetadata(getNodeId(), term, null, index, term);
+                        metadata.persist();
+                    } else {
+                        metadata.lastAppliedIndex = index;
+                        metadata.lastAppliedTerm = term;
+                        if (metadata.currentTerm < term) {
+                            metadata.currentTerm = term;
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                LOG.error("Failed to apply transaction: " + command, e);
+                return org.apache.ratis.protocol.Message.valueOf("FAILURE|" + e.getMessage());
             }
 
-            // Update last applied index in RaftMetadata
-            QuarkusTransaction.requiringNew().run(() -> {
-                RaftMetadata metadata = RaftMetadata.findById(getNodeId());
-                if (metadata == null) {
-                    metadata = new RaftMetadata(getNodeId(), term, null, index, term);
-                    metadata.persist();
-                } else {
-                    metadata.lastAppliedIndex = index;
-                    metadata.lastAppliedTerm = term;
-                    if (metadata.currentTerm < term) {
-                        metadata.currentTerm = term;
-                    }
-                }
-            });
-        } catch (Exception e) {
-            LOG.error("Failed to apply transaction: " + command, e);
-            return CompletableFuture.completedFuture(org.apache.ratis.protocol.Message.valueOf("FAILURE|" + e.getMessage()));
-        }
-
-        return CompletableFuture.completedFuture(org.apache.ratis.protocol.Message.valueOf("SUCCESS"));
+            return org.apache.ratis.protocol.Message.valueOf("SUCCESS");
+        }, SM_EXECUTOR);
     }
 
     private String decodeValue(String value) {

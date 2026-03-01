@@ -39,12 +39,12 @@ public class ReplicationTest {
         
         // Setup a queue and exchange
         if (io.dist.model.Exchange.findById("test-exchange") == null) {
-            queueService.createExchange("test-exchange", ExchangeType.DIRECT, true);
+            queueService.createExchange("test-exchange", ExchangeType.DIRECT, true).await().indefinitely();
         }
         if (io.dist.model.Queue.findById("test-queue") == null) {
-            queueService.createQueue("test-queue", "default", true, false);
+            queueService.createQueue("test-queue", "default", true, false).await().indefinitely();
         }
-        queueService.bind("test-exchange", "test-queue", "routing.key");
+        queueService.bind("test-exchange", "test-queue", "routing.key").await().indefinitely();
     }
 
     @Test
@@ -52,13 +52,13 @@ public class ReplicationTest {
         String payload = "Replicated Message Content";
         
         // This should go through Raft -> StateMachine -> Storage
-        messagingEngine.publish("test-exchange", "routing.key", payload);
+        messagingEngine.publish("test-exchange", "routing.key", payload).await().indefinitely();
         
         // Check if it reached the buffer via StateMachine
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .until(() -> storageService.getBuffer("test-queue").size() > 0);
         
-        var msg = messagingEngine.poll("test-queue");
+        var msg = messagingEngine.poll("test-queue").await().indefinitely();
         assertNotNull(msg);
         assertTrue(msg.payload.contains(payload));
     }

@@ -1,301 +1,1129 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>simpleMQ Management Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>simpleMQ — Management Console</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
-        body { background-color: #f8f9fa; }
-        .navbar { background-color: #343a40; }
-        .card { margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .metric-value { font-size: 2rem; font-weight: bold; }
-        .leader-badge { font-size: 0.8rem; vertical-align: middle; }
+        :root {
+            --sidebar-width: 230px;
+            --topbar-height: 56px;
+            --accent: #6f42c1;
+            --accent-hover: #7c50d4;
+        }
+
+        body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', system-ui, sans-serif; }
+
+        /* ── Sidebar ─────────────────────────────────────────── */
+        #sidebar {
+            position: fixed; top: 0; left: 0;
+            width: var(--sidebar-width); height: 100vh;
+            background: #161b22; border-right: 1px solid #30363d;
+            display: flex; flex-direction: column; z-index: 1040;
+            transition: transform 0.25s ease;
+        }
+        #sidebar .logo {
+            height: var(--topbar-height);
+            display: flex; align-items: center; padding: 0 1.25rem;
+            border-bottom: 1px solid #30363d;
+            font-weight: 700; font-size: 1.1rem; letter-spacing: .5px;
+        }
+        #sidebar .logo .dot { color: var(--accent); }
+        .nav-section { font-size: .7rem; font-weight: 600; color: #8b949e;
+            text-transform: uppercase; letter-spacing: 1px;
+            padding: .9rem 1.25rem .35rem; }
+        .sidebar-link {
+            display: flex; align-items: center; gap: .65rem;
+            padding: .5rem 1.25rem; color: #8b949e; text-decoration: none;
+            border-radius: 6px; margin: 1px 8px; font-size: .9rem;
+            transition: background .15s, color .15s;
+        }
+        .sidebar-link:hover { background: #21262d; color: #e6edf3; }
+        .sidebar-link.active { background: #1c2a3e; color: #58a6ff; font-weight: 600; }
+        .sidebar-link .bi { font-size: 1rem; width: 1rem; }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            display: inline-block; margin-left: auto;
+        }
+        .status-dot.online { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+        .status-dot.offline { background: #f85149; }
+
+        /* ── Topbar ──────────────────────────────────────────── */
+        #topbar {
+            position: fixed; top: 0; left: var(--sidebar-width);
+            right: 0; height: var(--topbar-height);
+            background: #161b22; border-bottom: 1px solid #30363d;
+            display: flex; align-items: center; padding: 0 1.5rem;
+            gap: 1rem; z-index: 1030;
+        }
+        #topbar h5 { margin: 0; font-weight: 600; color: #e6edf3; font-size: 1rem; }
+        .node-badge {
+            background: #21262d; border: 1px solid #30363d;
+            border-radius: 20px; padding: .2rem .75rem;
+            font-size: .78rem; color: #8b949e; display: flex; align-items: center; gap: .4rem;
+        }
+        .node-badge b { color: #e6edf3; }
+        .leader-pill {
+            background: var(--accent); color: #fff;
+            border-radius: 20px; padding: .15rem .6rem;
+            font-size: .72rem; font-weight: 700; display: none;
+        }
+
+        /* ── Main content ────────────────────────────────────── */
+        #main {
+            margin-left: var(--sidebar-width);
+            padding-top: calc(var(--topbar-height) + 1.5rem);
+            padding-left: 1.5rem; padding-right: 1.5rem; padding-bottom: 2rem;
+            min-height: 100vh;
+        }
+
+        /* ── Pages ───────────────────────────────────────────── */
+        .page { display: none; }
+        .page.active { display: block; }
+
+        /* ── Metric cards ────────────────────────────────────── */
+        .metric-card {
+            background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+            padding: 1.25rem 1.5rem; display: flex; align-items: center; gap: 1rem;
+        }
+        .metric-icon {
+            width: 46px; height: 46px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.3rem; flex-shrink: 0;
+        }
+        .metric-card .val { font-size: 1.85rem; font-weight: 700; color: #e6edf3; line-height: 1; }
+        .metric-card .lbl { font-size: .78rem; color: #8b949e; margin-top: .2rem; }
+
+        /* ── Tables ──────────────────────────────────────────── */
+        .smq-table { background: #161b22; border: 1px solid #30363d; border-radius: 12px; overflow: hidden; }
+        .smq-table table { margin: 0; color: #c9d1d9; }
+        .smq-table thead th { background: #1c2128; border-color: #30363d; font-size: .8rem;
+            text-transform: uppercase; letter-spacing: .5px; color: #8b949e; font-weight: 600; }
+        .smq-table td { border-color: #21262d; vertical-align: middle; font-size: .9rem; }
+        .smq-table tr:hover td { background: #1c2128; }
+        .smq-table-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1rem 1.25rem; border-bottom: 1px solid #30363d;
+        }
+        .smq-table-header h6 { margin: 0; font-weight: 600; color: #e6edf3; }
+
+        /* ── Badges ──────────────────────────────────────────── */
+        .type-badge { border-radius: 6px; padding: .2rem .55rem; font-size: .75rem; font-weight: 600; }
+        .type-direct { background: #1c2a3e; color: #58a6ff; }
+        .type-fanout { background: #1a3626; color: #3fb950; }
+        .count-badge { background: #21262d; color: #e6edf3; border-radius: 6px; padding: .15rem .5rem; font-size: .82rem; font-weight: 600; }
+
+        /* ── Section title ───────────────────────────────────── */
+        .section-title { font-size: 1.1rem; font-weight: 700; color: #e6edf3; margin-bottom: 1.25rem; }
+
+        /* ── Card panel ──────────────────────────────────────── */
+        .smq-panel { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 1.25rem 1.5rem; }
+
+        /* ── Cluster node card ───────────────────────────────── */
+        .node-card {
+            background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+            padding: .85rem 1rem; display: flex; align-items: center; gap: .75rem;
+        }
+        .node-card.is-leader { border-color: var(--accent); }
+        .node-card .node-id { font-weight: 600; color: #e6edf3; font-size: .9rem; }
+        .node-card .node-addr { font-size: .78rem; color: #8b949e; }
+
+        /* ── Activity log ────────────────────────────────────── */
+        #activity-log { max-height: 220px; overflow-y: auto; font-size: .8rem; }
+        .log-entry { padding: .3rem .5rem; border-radius: 5px; display: flex; gap: .5rem; align-items: flex-start; }
+        .log-entry:nth-child(even) { background: #1c2128; }
+        .log-time { color: #8b949e; flex-shrink: 0; }
+        .log-ok { color: #3fb950; }
+        .log-err { color: #f85149; }
+        .log-info { color: #58a6ff; }
+
+        /* ── Toast ───────────────────────────────────────────── */
+        #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; display: flex; flex-direction: column; gap: .5rem; }
+        .smq-toast {
+            background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+            padding: .75rem 1.1rem; min-width: 260px; max-width: 380px;
+            display: flex; align-items: flex-start; gap: .65rem;
+            box-shadow: 0 8px 24px rgba(0,0,0,.5);
+            animation: slideIn .2s ease;
+        }
+        .smq-toast.success .ti { color: #3fb950; }
+        .smq-toast.error .ti { color: #f85149; }
+        .smq-toast.info .ti { color: #58a6ff; }
+        .smq-toast .ti { font-size: 1.1rem; margin-top: .1rem; flex-shrink: 0; }
+        .smq-toast .tc { font-size: .87rem; color: #e6edf3; }
+        .smq-toast .ts { font-size: .75rem; color: #8b949e; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+
+        /* ── Messaging panel ─────────────────────────────────── */
+        .msg-bubble {
+            background: #1c2a3e; border: 1px solid #30363d; border-radius: 10px;
+            padding: 1rem; font-family: 'Courier New', monospace; font-size: .85rem;
+            word-break: break-all; max-height: 200px; overflow-y: auto; color: #c9d1d9;
+        }
+        .msg-actions { display: flex; gap: .5rem; margin-top: .75rem; }
+
+        /* ── Refresh bar ─────────────────────────────────────── */
+        .refresh-bar {
+            height: 3px; background: var(--accent);
+            position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+            transform-origin: left; transform: scaleX(0);
+            transition: transform 0.1s linear;
+        }
+
+        /* ── Scrollbar ───────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+        /* ── Utility ─────────────────────────────────────────── */
+        .btn-smq-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .btn-smq-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+        .form-control, .form-select { background: #0d1117; border-color: #30363d; color: #c9d1d9; }
+        .form-control:focus, .form-select:focus { background: #0d1117; border-color: var(--accent); color: #c9d1d9; box-shadow: 0 0 0 3px rgba(111,66,193,.25); }
+        .modal-content { background: #161b22; border: 1px solid #30363d; }
+        .modal-header { border-color: #30363d; }
+        .modal-footer { border-color: #30363d; }
+        input::placeholder, textarea::placeholder { color: #484f58 !important; }
+        .empty-state { text-align: center; padding: 2.5rem; color: #8b949e; }
+        .empty-state .bi { font-size: 2.5rem; display: block; margin-bottom: .75rem; opacity: .4; }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-dark mb-4">
-        <div class="container-fluid">
-            <span class="navbar-brand mb-0 h1">simpleMQ Management</span>
-            <div id="node-info" class="text-light">
-                Node: <span id="current-node">...</span> | Leader: <span id="current-leader">...</span>
-                <span id="leader-tag" class="badge bg-success leader-badge d-none">LEADER</span>
+
+<!-- ── Progress bar ────────────────────────────────────────── -->
+<div class="refresh-bar" id="refresh-bar"></div>
+
+<!-- ── Sidebar ─────────────────────────────────────────────── -->
+<nav id="sidebar">
+    <div class="logo"><i class="bi bi-activity me-2" style="color:var(--accent)"></i>simple<span class="dot">MQ</span></div>
+    <div style="overflow-y:auto; flex:1; padding-top:.5rem;">
+        <div class="nav-section">Overview</div>
+        <a class="sidebar-link active" href="#" data-page="dashboard">
+            <i class="bi bi-grid-1x2"></i> Dashboard
+        </a>
+
+        <div class="nav-section">Resources</div>
+        <a class="sidebar-link" href="#" data-page="queues">
+            <i class="bi bi-collection"></i> Queues
+            <span class="count-badge ms-auto" id="sb-q-count">0</span>
+        </a>
+        <a class="sidebar-link" href="#" data-page="exchanges">
+            <i class="bi bi-arrow-left-right"></i> Exchanges
+            <span class="count-badge ms-auto" id="sb-e-count">0</span>
+        </a>
+        <a class="sidebar-link" href="#" data-page="bindings">
+            <i class="bi bi-diagram-3"></i> Bindings
+        </a>
+
+        <div class="nav-section">Messaging</div>
+        <a class="sidebar-link" href="#" data-page="publish">
+            <i class="bi bi-send"></i> Publish
+        </a>
+        <a class="sidebar-link" href="#" data-page="consume">
+            <i class="bi bi-inbox"></i> Consume
+        </a>
+
+        <div class="nav-section">Infrastructure</div>
+        <a class="sidebar-link" href="#" data-page="cluster">
+            <i class="bi bi-diagram-2"></i> Cluster
+        </a>
+    </div>
+    <div style="padding:.75rem 8px; border-top:1px solid #30363d;">
+        <div class="sidebar-link" style="cursor:default;">
+            <i class="bi bi-circle-fill" style="font-size:.55rem; color:#3fb950"></i>
+            <span style="font-size:.78rem; color:#8b949e;">Connected</span>
+            <span id="sb-refresh-toggle" class="ms-auto" style="cursor:pointer;" title="Toggle auto-refresh">
+                <i class="bi bi-arrow-clockwise" style="color:#8b949e;"></i>
+            </span>
+        </div>
+    </div>
+</nav>
+
+<!-- ── Topbar ───────────────────────────────────────────────── -->
+<header id="topbar">
+    <h5 id="page-title">Dashboard</h5>
+    <div class="ms-auto d-flex align-items-center gap-2">
+        <div class="node-badge"><i class="bi bi-cpu"></i> Node: <b id="hdr-node">...</b></div>
+        <div class="node-badge"><i class="bi bi-crown"></i> Leader: <b id="hdr-leader">...</b></div>
+        <span class="leader-pill" id="hdr-leader-pill"><i class="bi bi-crown-fill"></i> LEADER</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="refreshData()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+    </div>
+</header>
+
+<!-- ── Main ─────────────────────────────────────────────────── -->
+<main id="main">
+
+    <!-- ======== DASHBOARD ======== -->
+    <div class="page active" id="page-dashboard">
+        <div class="section-title">Overview</div>
+
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#1c2a3e"><i class="bi bi-send-fill" style="color:#58a6ff"></i></div>
+                    <div><div class="val" id="d-published">0</div><div class="lbl">Published</div></div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#1a3626"><i class="bi bi-check-circle-fill" style="color:#3fb950"></i></div>
+                    <div><div class="val" id="d-acked">0</div><div class="lbl">Acked</div></div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#2d2a1e"><i class="bi bi-x-circle-fill" style="color:#d29922"></i></div>
+                    <div><div class="val" id="d-nacked">0</div><div class="lbl">Nacked</div></div>
+                </div>
+            </div>
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#2d1b1b"><i class="bi bi-exclamation-triangle-fill" style="color:#f85149"></i></div>
+                    <div><div class="val" id="d-dlq">0</div><div class="lbl">In DLQ</div></div>
+                </div>
             </div>
         </div>
-    </nav>
 
-    <div class="container">
-        <!-- Summary Cards -->
-        <div class="row">
-            <div class="col-md-3">
-                <div class="card text-center text-white bg-primary">
-                    <div class="card-body">
-                        <div class="card-title">Messages Published</div>
-                        <div class="metric-value" id="m-published">0</div>
-                    </div>
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#1c1c2e"><i class="bi bi-arrow-down-circle-fill" style="color:#a371f7"></i></div>
+                    <div><div class="val" id="d-polls">0</div><div class="lbl">Poll Requests</div></div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card text-center text-white bg-success">
-                    <div class="card-body">
-                        <div class="card-title">Messages Acked</div>
-                        <div class="metric-value" id="m-acked">0</div>
-                    </div>
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#1a3626"><i class="bi bi-collection-fill" style="color:#3fb950"></i></div>
+                    <div><div class="val" id="d-queues">0</div><div class="lbl">Queues</div></div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card text-center text-white bg-warning">
-                    <div class="card-body">
-                        <div class="card-title">Messages Nacked</div>
-                        <div class="metric-value" id="m-nacked">0</div>
-                    </div>
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#1c2a3e"><i class="bi bi-arrow-left-right" style="color:#58a6ff"></i></div>
+                    <div><div class="val" id="d-exchanges">0</div><div class="lbl">Exchanges</div></div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card text-center text-white bg-danger">
-                    <div class="card-body">
-                        <div class="card-title">In DLQ</div>
-                        <div class="metric-value" id="m-dlq">0</div>
-                    </div>
+            <div class="col-6 col-xl-3">
+                <div class="metric-card">
+                    <div class="metric-icon" style="background:#21262d"><i class="bi bi-diagram-2-fill" style="color:#8b949e"></i></div>
+                    <div><div class="val" id="d-peers">0</div><div class="lbl">Cluster Nodes</div></div>
                 </div>
             </div>
         </div>
 
-        <div class="row">
-            <!-- Queues -->
-            <div class="col-md-8">
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">Queues</h5>
-                        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#createQueueModal">New Queue</button>
+        <div class="row g-3">
+            <!-- Quick queues -->
+            <div class="col-md-7">
+                <div class="smq-table">
+                    <div class="smq-table-header">
+                        <h6><i class="bi bi-collection me-2 text-success"></i>Queues</h6>
                     </div>
-                    <div class="card-body">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>Name</th>
-                                    <th>Group</th>
-                                    <th>Messages</th>
-                                    <th>Durable</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="queues-table">
-                                <!-- Queues will be populated here -->
-                            </tbody>
-                        </table>
-                    </div>
+                    <table class="table table-borderless mb-0">
+                        <thead><tr><th>Name</th><th>Group</th><th>Messages</th><th>Durable</th></tr></thead>
+                        <tbody id="dash-queues">
+                            <tr><td colspan="4"><div class="empty-state"><i class="bi bi-inbox"></i>No queues yet</div></td></tr>
+                        </tbody>
+                    </table>
                 </div>
-
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">Exchanges</h5>
-                        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#createExchangeModal">New Exchange</button>
+            </div>
+            <!-- Activity log -->
+            <div class="col-md-5">
+                <div class="smq-panel h-100">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span style="font-weight:600;color:#e6edf3;font-size:.9rem;"><i class="bi bi-terminal me-2"></i>Activity Log</span>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="clearLog()" style="font-size:.75rem;">Clear</button>
                     </div>
-                    <div class="card-body">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>Name</th>
-                                    <th>Type</th>
-                                    <th>Durable</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="exchanges-table">
-                                <!-- Exchanges will be populated here -->
-                            </tbody>
-                        </table>
+                    <div id="activity-log"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== QUEUES ======== -->
+    <div class="page" id="page-queues">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="section-title mb-0">Queues</div>
+            <button class="btn btn-smq-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createQueueModal">
+                <i class="bi bi-plus-lg me-1"></i>New Queue
+            </button>
+        </div>
+        <div class="smq-table">
+            <table class="table table-borderless mb-0">
+                <thead><tr><th>Name</th><th>Group</th><th>Messages</th><th>Durable</th><th>Auto-delete</th><th></th></tr></thead>
+                <tbody id="queues-table">
+                    <tr><td colspan="6"><div class="empty-state"><i class="bi bi-collection"></i>No queues yet</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ======== EXCHANGES ======== -->
+    <div class="page" id="page-exchanges">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="section-title mb-0">Exchanges</div>
+            <button class="btn btn-smq-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createExchangeModal">
+                <i class="bi bi-plus-lg me-1"></i>New Exchange
+            </button>
+        </div>
+        <div class="smq-table">
+            <table class="table table-borderless mb-0">
+                <thead><tr><th>Name</th><th>Type</th><th>Durable</th><th></th></tr></thead>
+                <tbody id="exchanges-table">
+                    <tr><td colspan="4"><div class="empty-state"><i class="bi bi-arrow-left-right"></i>No exchanges yet</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ======== BINDINGS ======== -->
+    <div class="page" id="page-bindings">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="section-title mb-0">Bindings</div>
+            <button class="btn btn-smq-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createBindingModal">
+                <i class="bi bi-plus-lg me-1"></i>New Binding
+            </button>
+        </div>
+        <div class="smq-table">
+            <table class="table table-borderless mb-0">
+                <thead><tr><th>Exchange</th><th></th><th>Queue</th><th>Routing Key</th><th></th></tr></thead>
+                <tbody id="bindings-table">
+                    <tr><td colspan="5"><div class="empty-state"><i class="bi bi-diagram-3"></i>No bindings yet</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ======== PUBLISH ======== -->
+    <div class="page" id="page-publish">
+        <div class="section-title">Publish Message</div>
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="smq-panel">
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Exchange</label>
+                        <select class="form-select" id="pub-exchange">
+                            <option value="">— select exchange —</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Routing Key</label>
+                        <input type="text" class="form-control" id="pub-routing-key" placeholder="e.g. orders.new">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Payload</label>
+                        <textarea class="form-control" id="pub-payload" rows="6" placeholder='{"key": "value"}'></textarea>
+                    </div>
+                    <button class="btn btn-smq-primary w-100" onclick="publishMessage()">
+                        <i class="bi bi-send me-2"></i>Publish
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="smq-panel h-100">
+                    <div style="font-size:.82rem;color:#8b949e;margin-bottom:.75rem;">Recent Publishes</div>
+                    <div id="pub-history" style="display:flex;flex-direction:column;gap:.5rem;">
+                        <div class="empty-state"><i class="bi bi-send"></i>No messages sent yet</div>
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <!-- Cluster Info & System -->
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header"><h5>Cluster Nodes</h5></div>
-                    <div class="card-body">
-                        <ul class="list-group" id="peers-list">
-                            <!-- Peers will be populated here -->
-                        </ul>
+    <!-- ======== CONSUME ======== -->
+    <div class="page" id="page-consume">
+        <div class="section-title">Consume Messages</div>
+        <div class="row g-3">
+            <div class="col-md-5">
+                <div class="smq-panel">
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Queue</label>
+                        <select class="form-select" id="con-queue">
+                            <option value="">— select queue —</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-smq-primary w-100" onclick="pollMessage()">
+                        <i class="bi bi-arrow-down-circle me-2"></i>Poll Next Message
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-7">
+                <div class="smq-panel">
+                    <div style="font-size:.82rem;color:#8b949e;margin-bottom:.75rem;">Current Message</div>
+                    <div id="con-msg-area">
+                        <div class="empty-state"><i class="bi bi-inbox"></i>No message polled yet</div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
 
-                <div class="card">
-                    <div class="card-header"><h5>System Metrics</h5></div>
-                    <div class="card-body">
-                        <p>Poll Requests: <span id="m-poll-requests" class="fw-bold">0</span></p>
-                        <hr>
-                        <button class="btn btn-secondary w-100" onclick="refreshData()">Refresh Now</button>
-                        <div class="form-check mt-2">
-                            <input class="form-check-input" type="checkbox" id="auto-refresh" checked>
-                            <label class="form-check-label" for="auto-refresh">Auto-refresh (5s)</label>
+    <!-- ======== CLUSTER ======== -->
+    <div class="page" id="page-cluster">
+        <div class="section-title">Cluster</div>
+        <div class="row g-3">
+            <div class="col-md-7">
+                <div class="smq-panel">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span style="font-weight:600;color:#e6edf3;font-size:.9rem;"><i class="bi bi-diagram-2 me-2"></i>Nodes</span>
+                    </div>
+                    <div id="cluster-nodes" class="d-flex flex-column gap-2">
+                        <div class="empty-state"><i class="bi bi-diagram-2"></i>Loading cluster info...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-5">
+                <div class="smq-panel mb-3">
+                    <div style="font-weight:600;color:#e6edf3;font-size:.9rem;margin-bottom:1rem;"><i class="bi bi-person-plus me-2"></i>Join Cluster</div>
+                    <div class="mb-2">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Node ID</label>
+                        <input type="text" class="form-control" id="join-id" placeholder="e.g. node3">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Address</label>
+                        <input type="text" class="form-control" id="join-addr" placeholder="e.g. 127.0.0.1:10003">
+                    </div>
+                    <button class="btn btn-smq-primary w-100" onclick="joinCluster()">
+                        <i class="bi bi-plus-circle me-2"></i>Join
+                    </button>
+                </div>
+                <div class="smq-panel">
+                    <div style="font-weight:600;color:#e6edf3;font-size:.9rem;margin-bottom:1rem;"><i class="bi bi-person-dash me-2"></i>Leave Cluster</div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Node ID</label>
+                        <input type="text" class="form-control" id="leave-id" placeholder="e.g. node2">
+                    </div>
+                    <button class="btn btn-outline-danger w-100" onclick="leaveCluster()">
+                        <i class="bi bi-dash-circle me-2"></i>Remove Node
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</main>
+
+<!-- ── Toast container ──────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<!-- ── Modals ───────────────────────────────────────────────── -->
+
+<!-- Create Queue -->
+<div class="modal fade" id="createQueueModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title"><i class="bi bi-collection me-2 text-success"></i>Create Queue</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="q-name" placeholder="my-queue">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Group</label>
+                    <input type="text" class="form-control" id="q-group" value="default" placeholder="default">
+                </div>
+                <div class="row">
+                    <div class="col-6">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="q-durable" checked>
+                            <label class="form-check-label" style="font-size:.85rem;">Durable</label>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="q-autodelete">
+                            <label class="form-check-label" style="font-size:.85rem;">Auto-delete</label>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <!-- Modals -->
-    <div class="modal fade" id="createQueueModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header"><h5>Create Queue</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-                <div class="modal-body">
-                    <form id="queueForm">
-                        <div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="q-name" required></div>
-                        <div class="mb-3"><label class="form-label">Group</label><input type="text" class="form-control" id="q-group" value="default"></div>
-                        <div class="form-check mb-3"><input type="checkbox" class="form-check-input" id="q-durable" checked><label class="form-check-label">Durable</label></div>
-                    </form>
-                </div>
-                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-primary" onclick="createQueue()">Create</button></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-smq-primary btn-sm" onclick="createQueue()"><i class="bi bi-plus-lg me-1"></i>Create</button>
             </div>
         </div>
     </div>
+</div>
 
-    <div class="modal fade" id="createExchangeModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header"><h5>Create Exchange</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-                <div class="modal-body">
-                    <form id="exchangeForm">
-                        <div class="mb-3"><label class="form-label">Name</label><input type="text" class="form-control" id="e-name" required></div>
-                        <div class="mb-3">
-                            <label class="form-label">Type</label>
-                            <select class="form-select" id="e-type">
-                                <option value="DIRECT">Direct</option>
-                                <option value="FANOUT">Pub-Sub (Fanout)</option>
-                            </select>
-                        </div>
-                        <div class="form-check mb-3"><input type="checkbox" class="form-check-input" id="e-durable" checked><label class="form-check-label">Durable</label></div>
-                    </form>
+<!-- Create Exchange -->
+<div class="modal fade" id="createExchangeModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title"><i class="bi bi-arrow-left-right me-2" style="color:#58a6ff"></i>Create Exchange</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Name <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="e-name" placeholder="my-exchange">
                 </div>
-                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-primary" onclick="createExchange()">Create</button></div>
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Type</label>
+                    <select class="form-select" id="e-type">
+                        <option value="DIRECT">Direct — route by key</option>
+                        <option value="FANOUT">Fanout — broadcast to all</option>
+                    </select>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="e-durable" checked>
+                    <label class="form-check-label" style="font-size:.85rem;">Durable</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-smq-primary btn-sm" onclick="createExchange()"><i class="bi bi-plus-lg me-1"></i>Create</button>
             </div>
         </div>
     </div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        async function fetchData(url, method = 'GET', body = null) {
-            const options = { method, headers: { 'Content-Type': 'application/json' } };
-            if (body) options.body = JSON.stringify(body);
-            const response = await fetch(url, options);
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || response.statusText);
-            }
-            if (response.status === 204) return null;
-            return await response.json();
-        }
+<!-- Create Binding -->
+<div class="modal fade" id="createBindingModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title"><i class="bi bi-diagram-3 me-2" style="color:#a371f7"></i>Create Binding</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Exchange <span class="text-danger">*</span></label>
+                    <select class="form-select" id="b-exchange">
+                        <option value="">— select —</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Queue <span class="text-danger">*</span></label>
+                    <select class="form-select" id="b-queue">
+                        <option value="">— select —</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Routing Key</label>
+                    <input type="text" class="form-control" id="b-routing-key" placeholder="Leave empty for fanout">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-smq-primary btn-sm" onclick="createBinding()"><i class="bi bi-link me-1"></i>Bind</button>
+            </div>
+        </div>
+    </div>
+</div>
 
-        async function refreshData() {
-            try {
-                const summary = await fetchData('/api/management/summary');
-                
-                // Header
-                document.getElementById('current-node').textContent = summary.nodeId;
-                document.getElementById('current-leader').textContent = summary.leaderId;
-                if (summary.isLeader) {
-                    document.getElementById('leader-tag').classList.remove('d-none');
-                } else {
-                    document.getElementById('leader-tag').classList.add('d-none');
-                }
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+/* ─────────────────────────────────────────────────────────────
+   State
+───────────────────────────────────────────────────────────── */
+let autoRefresh = true;
+let publishHistory = [];
+let currentMsg = null;
+let cachedExchanges = [];
+let cachedQueues = [];
+let cachedBindings = [];
 
-                // Metrics
-                document.getElementById('m-published').textContent = summary.metrics.totalMessagesPublished;
-                document.getElementById('m-acked').textContent = summary.metrics.totalMessagesAcked;
-                document.getElementById('m-nacked').textContent = summary.metrics.totalMessagesNacked;
-                document.getElementById('m-dlq').textContent = summary.metrics.totalMessagesDLQ;
-                document.getElementById('m-poll-requests').textContent = summary.metrics.totalPollRequests;
+/* ─────────────────────────────────────────────────────────────
+   Navigation
+───────────────────────────────────────────────────────────── */
+const pageTitles = {
+    dashboard: 'Dashboard', queues: 'Queues', exchanges: 'Exchanges',
+    bindings: 'Bindings', publish: 'Publish', consume: 'Consume', cluster: 'Cluster'
+};
 
-                // Queues
-                const qBody = document.getElementById('queues-table');
-                qBody.innerHTML = '';
-                summary.queues.forEach(q => {
-                    const row = `<tr>
-                        <td>${q.name}</td>
-                        <td>${q.group}</td>
-                        <td>${q.messageCount}</td>
-                        <td>${q.durable ? '✅' : '❌'}</td>
-                        <td><button class="btn btn-sm btn-outline-danger" onclick="deleteQueue('${q.name}')">Delete</button></td>
-                    </tr>`;
-                    qBody.innerHTML += row;
-                });
+document.querySelectorAll('[data-page]').forEach(link => {
+    link.addEventListener('click', e => {
+        e.preventDefault();
+        const page = link.dataset.page;
+        document.querySelectorAll('[data-page]').forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById('page-' + page).classList.add('active');
+        document.getElementById('page-title').textContent = pageTitles[page];
+    });
+});
 
-                // Exchanges
-                const eBody = document.getElementById('exchanges-table');
-                eBody.innerHTML = '';
-                summary.exchanges.forEach(e => {
-                    const row = `<tr>
-                        <td>${e.name}</td>
-                        <td>${e.type}</td>
-                        <td>${e.durable ? '✅' : '❌'}</td>
-                        <td><button class="btn btn-sm btn-outline-danger" onclick="deleteExchange('${e.name}')">Delete</button></td>
-                    </tr>`;
-                    eBody.innerHTML += row;
-                });
+/* ─────────────────────────────────────────────────────────────
+   HTTP helper
+───────────────────────────────────────────────────────────── */
+async function api(url, method = 'GET', body = null) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body !== null) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (res.status === 204) return null;
+    if (!res.ok) {
+        const txt = await res.text().catch(() => res.statusText);
+        throw new Error(txt || res.statusText);
+    }
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) return res.json();
+    return res.text();
+}
 
-                // Peers
-                const pList = document.getElementById('peers-list');
-                pList.innerHTML = '';
-                summary.peers.forEach(p => {
-                    const isLeader = p.split('=')[0] === summary.leaderId;
-                    const li = `<li class="list-group-item ${isLeader ? 'list-group-item-info' : ''}">
-                        ${p} ${isLeader ? '<span class="badge bg-primary float-end">Leader</span>' : ''}
-                    </li>`;
-                    pList.innerHTML += li;
-                });
+/* ─────────────────────────────────────────────────────────────
+   Toast
+───────────────────────────────────────────────────────────── */
+function toast(msg, type = 'info') {
+    const icons = { success: 'bi-check-circle-fill', error: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' };
+    const el = document.createElement('div');
+    el.className = `smq-toast ${type}`;
+    el.innerHTML = `<i class="bi ${icons[type]} ti"></i><div><div class="tc">${msg}</div></div>`;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+    logActivity(msg, type);
+}
 
-            } catch (error) {
-                console.error('Failed to refresh data', error);
-            }
-        }
+/* ─────────────────────────────────────────────────────────────
+   Activity log
+───────────────────────────────────────────────────────────── */
+function logActivity(msg, type = 'info') {
+    const log = document.getElementById('activity-log');
+    const cls = type === 'success' ? 'log-ok' : type === 'error' ? 'log-err' : 'log-info';
+    const time = new Date().toLocaleTimeString();
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<span class="log-time">${time}</span><span class="${cls}">${msg}</span>`;
+    log.insertBefore(entry, log.firstChild);
+    if (log.children.length > 100) log.removeChild(log.lastChild);
+}
 
-        async function createQueue() {
-            const name = document.getElementById('q-name').value;
-            const group = document.getElementById('q-group').value;
-            const durable = document.getElementById('q-durable').checked;
-            try {
-                await fetchData('/api/management/queues', 'POST', { name, queueGroup: group, durable, autoDelete: false });
-                bootstrap.Modal.getInstance(document.getElementById('createQueueModal')).hide();
-                refreshData();
-            } catch (e) { alert('Error: ' + e.message); }
-        }
+function clearLog() {
+    document.getElementById('activity-log').innerHTML = '';
+}
 
-        async function deleteQueue(name) {
-            if (!confirm('Are you sure you want to delete queue ' + name + '?')) return;
-            try {
-                await fetch('/api/management/queues/' + name, { method: 'DELETE' });
-                refreshData();
-            } catch (e) { alert('Error: ' + e.message); }
-        }
+/* ─────────────────────────────────────────────────────────────
+   Progress bar
+───────────────────────────────────────────────────────────── */
+function showProgress() {
+    const bar = document.getElementById('refresh-bar');
+    bar.style.transition = 'none';
+    bar.style.transform = 'scaleX(0)';
+    requestAnimationFrame(() => {
+        bar.style.transition = 'transform 0.4s ease';
+        bar.style.transform = 'scaleX(1)';
+    });
+    setTimeout(() => { bar.style.transform = 'scaleX(0)'; }, 500);
+}
 
-        async function createExchange() {
-            const name = document.getElementById('e-name').value;
-            const type = document.getElementById('e-type').value;
-            const durable = document.getElementById('e-durable').checked;
-            try {
-                await fetchData('/api/management/exchanges', 'POST', { name, type, durable });
-                bootstrap.Modal.getInstance(document.getElementById('createExchangeModal')).hide();
-                refreshData();
-            } catch (e) { alert('Error: ' + e.message); }
-        }
+/* ─────────────────────────────────────────────────────────────
+   Main data refresh
+───────────────────────────────────────────────────────────── */
+async function refreshData() {
+    showProgress();
+    try {
+        const s = await api('/api/management/summary');
 
-        async function deleteExchange(name) {
-            if (!confirm('Are you sure you want to delete exchange ' + name + '?')) return;
-            try {
-                await fetch('/api/management/exchanges/' + name, { method: 'DELETE' });
-                refreshData();
-            } catch (e) { alert('Error: ' + e.message); }
-        }
+        // Header
+        document.getElementById('hdr-node').textContent = s.nodeId || '—';
+        document.getElementById('hdr-leader').textContent = s.leaderId || '—';
+        const leaderPill = document.getElementById('hdr-leader-pill');
+        leaderPill.style.display = s.isLeader ? 'inline-block' : 'none';
 
-        // Init
+        // Dashboard metrics
+        document.getElementById('d-published').textContent = fmt(s.metrics.totalMessagesPublished);
+        document.getElementById('d-acked').textContent = fmt(s.metrics.totalMessagesAcked);
+        document.getElementById('d-nacked').textContent = fmt(s.metrics.totalMessagesNacked);
+        document.getElementById('d-dlq').textContent = fmt(s.metrics.totalMessagesDLQ);
+        document.getElementById('d-polls').textContent = fmt(s.metrics.totalPollRequests);
+        document.getElementById('d-queues').textContent = s.queues.length;
+        document.getElementById('d-exchanges').textContent = s.exchanges.length;
+        document.getElementById('d-peers').textContent = s.peers.length;
+
+        // Sidebar counts
+        document.getElementById('sb-q-count').textContent = s.queues.length;
+        document.getElementById('sb-e-count').textContent = s.exchanges.length;
+
+        // Cache
+        cachedExchanges = s.exchanges;
+        cachedQueues = s.queues;
+
+        // Dashboard queue mini-table
+        renderDashQueues(s.queues);
+
+        // Queues table
+        renderQueues(s.queues);
+
+        // Exchanges table
+        renderExchanges(s.exchanges);
+
+        // Cluster nodes
+        renderCluster(s.peers, s.leaderId);
+
+        // Populate selects
+        populateSelects(s.exchanges, s.queues);
+
+    } catch (err) {
+        console.error('Refresh failed', err);
+        logActivity('Refresh failed: ' + err.message, 'error');
+    }
+
+    // Bindings (separate call)
+    try {
+        cachedBindings = await api('/api/management/bindings');
+        renderBindings(cachedBindings);
+    } catch (_) {}
+}
+
+function fmt(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n; }
+
+/* ─────────────────────────────────────────────────────────────
+   Renders
+───────────────────────────────────────────────────────────── */
+function renderDashQueues(queues) {
+    const tbody = document.getElementById('dash-queues');
+    if (!queues.length) {
+        tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state"><i class="bi bi-inbox"></i>No queues yet</div></td></tr>';
+        return;
+    }
+    tbody.innerHTML = queues.map(q => `
+        <tr>
+            <td><code style="color:#a371f7;font-size:.85rem;">${esc(q.name)}</code></td>
+            <td style="color:#8b949e;font-size:.82rem;">${esc(q.group || q.queueGroup || '')}</td>
+            <td><span class="count-badge">${q.messageCount}</span></td>
+            <td>${q.durable ? '<i class="bi bi-shield-check text-success"></i>' : '<i class="bi bi-shield-x text-secondary"></i>'}</td>
+        </tr>`).join('');
+}
+
+function renderQueues(queues) {
+    const tbody = document.getElementById('queues-table');
+    if (!queues.length) {
+        tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i class="bi bi-collection"></i>No queues yet</div></td></tr>';
+        return;
+    }
+    tbody.innerHTML = queues.map(q => `
+        <tr>
+            <td><code style="color:#a371f7;font-size:.88rem;">${esc(q.name)}</code></td>
+            <td style="color:#8b949e;">${esc(q.group || q.queueGroup || '')}</td>
+            <td><span class="count-badge">${q.messageCount}</span></td>
+            <td>${q.durable ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-dash-circle text-secondary"></i>'}</td>
+            <td>${q.autoDelete ? '<i class="bi bi-check-circle-fill text-warning"></i>' : '<i class="bi bi-dash-circle text-secondary"></i>'}</td>
+            <td class="text-end">
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteQueue('${esc(q.name)}')">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        </tr>`).join('');
+}
+
+function renderExchanges(exchanges) {
+    const tbody = document.getElementById('exchanges-table');
+    if (!exchanges.length) {
+        tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state"><i class="bi bi-arrow-left-right"></i>No exchanges yet</div></td></tr>';
+        return;
+    }
+    tbody.innerHTML = exchanges.map(e => `
+        <tr>
+            <td><code style="color:#58a6ff;font-size:.88rem;">${esc(e.name)}</code></td>
+            <td><span class="type-badge ${e.type === 'FANOUT' ? 'type-fanout' : 'type-direct'}">${esc(e.type)}</span></td>
+            <td>${e.durable ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-dash-circle text-secondary"></i>'}</td>
+            <td class="text-end">
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteExchange('${esc(e.name)}')">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        </tr>`).join('');
+}
+
+function renderBindings(bindings) {
+    const tbody = document.getElementById('bindings-table');
+    if (!bindings || !bindings.length) {
+        tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i class="bi bi-diagram-3"></i>No bindings yet</div></td></tr>';
+        return;
+    }
+    tbody.innerHTML = bindings.map(b => `
+        <tr>
+            <td><code style="color:#58a6ff;font-size:.88rem;">${esc(b.exchangeName)}</code></td>
+            <td><i class="bi bi-arrow-right text-secondary"></i></td>
+            <td><code style="color:#a371f7;font-size:.88rem;">${esc(b.queueName)}</code></td>
+            <td><span style="color:#8b949e;font-size:.82rem;">${esc(b.routingKey || '(any)')}</span></td>
+            <td class="text-end">
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteBinding('${esc(b.exchangeName)}','${esc(b.queueName)}','${esc(b.routingKey||'')}')">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        </tr>`).join('');
+}
+
+function renderCluster(peers, leaderId) {
+    const container = document.getElementById('cluster-nodes');
+    if (!peers.length) {
+        container.innerHTML = '<div class="empty-state"><i class="bi bi-diagram-2"></i>No peers found</div>';
+        return;
+    }
+    container.innerHTML = peers.map(p => {
+        const [id, addr] = p.split('=');
+        const isLeader = id === leaderId;
+        return `<div class="node-card ${isLeader ? 'is-leader' : ''}">
+            <div class="status-dot online"></div>
+            <div style="flex:1;">
+                <div class="node-id">${esc(id)}</div>
+                <div class="node-addr">${esc(addr || '')}</div>
+            </div>
+            ${isLeader ? '<span style="background:var(--accent);color:#fff;border-radius:20px;padding:.15rem .6rem;font-size:.72rem;font-weight:700;"><i class="bi bi-crown-fill"></i> LEADER</span>' : ''}
+        </div>`;
+    }).join('');
+}
+
+function populateSelects(exchanges, queues) {
+    // Publish
+    const pubEx = document.getElementById('pub-exchange');
+    const curPub = pubEx.value;
+    pubEx.innerHTML = '<option value="">— select exchange —</option>' +
+        exchanges.map(e => `<option value="${esc(e.name)}" ${e.name === curPub ? 'selected' : ''}>${esc(e.name)} (${e.type})</option>`).join('');
+
+    // Consume
+    const conQ = document.getElementById('con-queue');
+    const curCon = conQ.value;
+    conQ.innerHTML = '<option value="">— select queue —</option>' +
+        queues.map(q => `<option value="${esc(q.name)}" ${q.name === curCon ? 'selected' : ''}>${esc(q.name)} (${q.messageCount} msg)</option>`).join('');
+
+    // Binding modal
+    const bEx = document.getElementById('b-exchange');
+    const bQ = document.getElementById('b-queue');
+    bEx.innerHTML = '<option value="">— select —</option>' +
+        exchanges.map(e => `<option value="${esc(e.name)}">${esc(e.name)}</option>`).join('');
+    bQ.innerHTML = '<option value="">— select —</option>' +
+        queues.map(q => `<option value="${esc(q.name)}">${esc(q.name)}</option>`).join('');
+}
+
+/* ─────────────────────────────────────────────────────────────
+   CRUD – Queues
+───────────────────────────────────────────────────────────── */
+async function createQueue() {
+    const name = document.getElementById('q-name').value.trim();
+    const group = document.getElementById('q-group').value.trim() || 'default';
+    const durable = document.getElementById('q-durable').checked;
+    const autoDelete = document.getElementById('q-autodelete').checked;
+    if (!name) { toast('Queue name is required', 'error'); return; }
+    try {
+        await api('/api/management/queues', 'POST', { name, queueGroup: group, durable, autoDelete });
+        bootstrap.Modal.getInstance(document.getElementById('createQueueModal')).hide();
+        document.getElementById('q-name').value = '';
+        toast(`Queue "${name}" created`, 'success');
         refreshData();
-        setInterval(() => {
-            if (document.getElementById('auto-refresh').checked) refreshData();
-        }, 5000);
-    </script>
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteQueue(name) {
+    if (!confirm(`Delete queue "${name}"? All messages will be lost.`)) return;
+    try {
+        await api('/api/management/queues/' + encodeURIComponent(name), 'DELETE');
+        toast(`Queue "${name}" deleted`, 'success');
+        refreshData();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   CRUD – Exchanges
+───────────────────────────────────────────────────────────── */
+async function createExchange() {
+    const name = document.getElementById('e-name').value.trim();
+    const type = document.getElementById('e-type').value;
+    const durable = document.getElementById('e-durable').checked;
+    if (!name) { toast('Exchange name is required', 'error'); return; }
+    try {
+        await api('/api/management/exchanges', 'POST', { name, type, durable });
+        bootstrap.Modal.getInstance(document.getElementById('createExchangeModal')).hide();
+        document.getElementById('e-name').value = '';
+        toast(`Exchange "${name}" created`, 'success');
+        refreshData();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteExchange(name) {
+    if (!confirm(`Delete exchange "${name}"?`)) return;
+    try {
+        await api('/api/management/exchanges/' + encodeURIComponent(name), 'DELETE');
+        toast(`Exchange "${name}" deleted`, 'success');
+        refreshData();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   CRUD – Bindings
+───────────────────────────────────────────────────────────── */
+async function createBinding() {
+    const exchangeName = document.getElementById('b-exchange').value;
+    const queueName = document.getElementById('b-queue').value;
+    const routingKey = document.getElementById('b-routing-key').value.trim();
+    if (!exchangeName || !queueName) { toast('Exchange and Queue are required', 'error'); return; }
+    try {
+        await api('/api/management/bindings', 'POST', { exchangeName, queueName, routingKey });
+        bootstrap.Modal.getInstance(document.getElementById('createBindingModal')).hide();
+        document.getElementById('b-routing-key').value = '';
+        toast(`Bound "${exchangeName}" → "${queueName}"`, 'success');
+        refreshData();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteBinding(exchangeName, queueName, routingKey) {
+    if (!confirm(`Remove binding ${exchangeName} → ${queueName}?`)) return;
+    try {
+        await api('/api/management/bindings', 'DELETE', { exchangeName, queueName, routingKey });
+        toast('Binding removed', 'success');
+        refreshData();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Messaging – Publish
+───────────────────────────────────────────────────────────── */
+async function publishMessage() {
+    const exchange = document.getElementById('pub-exchange').value;
+    const routingKey = document.getElementById('pub-routing-key').value.trim();
+    const payload = document.getElementById('pub-payload').value.trim();
+    if (!exchange) { toast('Select an exchange', 'error'); return; }
+    if (!payload) { toast('Payload is required', 'error'); return; }
+    try {
+        await api('/api/publish/' + encodeURIComponent(exchange), 'POST', { routingKey, payload });
+        toast(`Published to "${exchange}"`, 'success');
+        publishHistory.unshift({ exchange, routingKey, payload, time: new Date().toLocaleTimeString() });
+        if (publishHistory.length > 20) publishHistory.pop();
+        renderPubHistory();
+    } catch (e) { toast('Publish failed: ' + e.message, 'error'); }
+}
+
+function renderPubHistory() {
+    const el = document.getElementById('pub-history');
+    if (!publishHistory.length) {
+        el.innerHTML = '<div class="empty-state"><i class="bi bi-send"></i>No messages sent yet</div>';
+        return;
+    }
+    el.innerHTML = publishHistory.map(h => `
+        <div style="background:#1c2128;border-radius:8px;padding:.6rem .9rem;font-size:.82rem;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:.3rem;">
+                <span><code style="color:#58a6ff;">${esc(h.exchange)}</code>${h.routingKey ? ` <span style="color:#8b949e;">key: <code>${esc(h.routingKey)}</code></span>` : ''}</span>
+                <span style="color:#8b949e;">${h.time}</span>
+            </div>
+            <div style="color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(h.payload)}</div>
+        </div>`).join('');
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Messaging – Poll / Ack / Nack
+───────────────────────────────────────────────────────────── */
+async function pollMessage() {
+    const queue = document.getElementById('con-queue').value;
+    if (!queue) { toast('Select a queue', 'error'); return; }
+    try {
+        const msg = await fetch('/api/poll/' + encodeURIComponent(queue));
+        if (msg.status === 204) {
+            toast('Queue is empty', 'info');
+            document.getElementById('con-msg-area').innerHTML =
+                '<div class="empty-state"><i class="bi bi-inbox"></i>Queue is empty</div>';
+            currentMsg = null;
+            return;
+        }
+        if (!msg.ok) throw new Error(msg.statusText);
+        currentMsg = await msg.json();
+        renderCurrentMsg();
+        toast('Message polled', 'success');
+        logActivity(`Polled from "${queue}": ${currentMsg.messageId}`, 'info');
+    } catch (e) { toast('Poll failed: ' + e.message, 'error'); }
+}
+
+function renderCurrentMsg() {
+    if (!currentMsg) return;
+    const el = document.getElementById('con-msg-area');
+    el.innerHTML = `
+        <div class="mb-2" style="display:flex;justify-content:space-between;align-items:center;">
+            <code style="color:#58a6ff;font-size:.8rem;">${esc(currentMsg.messageId || '—')}</code>
+            <span style="font-size:.75rem;color:#8b949e;">${esc(currentMsg.routingKey || '')}</span>
+        </div>
+        <div class="msg-bubble">${esc(currentMsg.payload || JSON.stringify(currentMsg))}</div>
+        <div class="msg-actions">
+            <button class="btn btn-success btn-sm flex-fill" onclick="ackMessage()"><i class="bi bi-check-lg me-1"></i>Ack</button>
+            <button class="btn btn-warning btn-sm flex-fill" onclick="nackMessage(true)"><i class="bi bi-arrow-clockwise me-1"></i>Nack + Requeue</button>
+            <button class="btn btn-danger btn-sm flex-fill" onclick="nackMessage(false)"><i class="bi bi-x-lg me-1"></i>Nack + DLQ</button>
+        </div>`;
+}
+
+async function ackMessage() {
+    if (!currentMsg) return;
+    try {
+        await api('/api/poll/ack/' + encodeURIComponent(currentMsg.messageId), 'POST');
+        toast('Message acknowledged', 'success');
+        currentMsg = null;
+        document.getElementById('con-msg-area').innerHTML =
+            '<div class="empty-state"><i class="bi bi-check-circle"></i>Message acknowledged</div>';
+        refreshData();
+    } catch (e) { toast('Ack failed: ' + e.message, 'error'); }
+}
+
+async function nackMessage(requeue) {
+    if (!currentMsg) return;
+    try {
+        await api('/api/poll/nack/' + encodeURIComponent(currentMsg.messageId) + '?requeue=' + requeue, 'POST');
+        toast(requeue ? 'Message requeued' : 'Message sent to DLQ', requeue ? 'info' : 'error');
+        currentMsg = null;
+        document.getElementById('con-msg-area').innerHTML =
+            '<div class="empty-state"><i class="bi bi-inbox"></i>Ready to poll</div>';
+        refreshData();
+    } catch (e) { toast('Nack failed: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Cluster management
+───────────────────────────────────────────────────────────── */
+async function joinCluster() {
+    const id = document.getElementById('join-id').value.trim();
+    const address = document.getElementById('join-addr').value.trim();
+    if (!id || !address) { toast('Node ID and address are required', 'error'); return; }
+    try {
+        const res = await api(`/api/cluster/join?id=${encodeURIComponent(id)}&address=${encodeURIComponent(address)}`, 'POST');
+        toast(res || `Node "${id}" joined`, 'success');
+        document.getElementById('join-id').value = '';
+        document.getElementById('join-addr').value = '';
+        refreshData();
+    } catch (e) { toast('Join failed: ' + e.message, 'error'); }
+}
+
+async function leaveCluster() {
+    const id = document.getElementById('leave-id').value.trim();
+    if (!id) { toast('Node ID is required', 'error'); return; }
+    if (!confirm(`Remove node "${id}" from cluster?`)) return;
+    try {
+        const res = await api(`/api/cluster/leave?id=${encodeURIComponent(id)}`, 'POST');
+        toast(res || `Node "${id}" removed`, 'success');
+        document.getElementById('leave-id').value = '';
+        refreshData();
+    } catch (e) { toast('Leave failed: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   XSS safety
+───────────────────────────────────────────────────────────── */
+function esc(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Auto-refresh toggle
+───────────────────────────────────────────────────────────── */
+document.getElementById('sb-refresh-toggle').addEventListener('click', () => {
+    autoRefresh = !autoRefresh;
+    const icon = document.querySelector('#sb-refresh-toggle .bi');
+    icon.className = autoRefresh ? 'bi bi-arrow-clockwise' : 'bi bi-pause-circle';
+    icon.style.color = autoRefresh ? '#8b949e' : '#d29922';
+    toast(autoRefresh ? 'Auto-refresh enabled' : 'Auto-refresh paused', 'info');
+});
+
+/* ─────────────────────────────────────────────────────────────
+   Bootstrap
+───────────────────────────────────────────────────────────── */
+refreshData();
+setInterval(() => { if (autoRefresh) refreshData(); }, 5000);
+</script>
 </body>
 </html>

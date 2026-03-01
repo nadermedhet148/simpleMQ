@@ -1,6 +1,7 @@
 package io.dist.api;
 
 import io.dist.service.MessagingEngine;
+import io.smallrye.mutiny.Uni;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -21,8 +22,8 @@ public class PublishResource {
 
     @POST
     @Path("/{exchange}")
-    public Response publish(@PathParam("exchange") String exchange, PublishRequest request) {
-        messagingEngine.publish(exchange, request.routingKey, request.payload);
-        return Response.accepted().build();
+    public Uni<Response> publish(@PathParam("exchange") String exchange, PublishRequest request) {
+        return messagingEngine.publish(exchange, request.routingKey, request.payload)
+                .replaceWith(Response.accepted().build());
     }
 }

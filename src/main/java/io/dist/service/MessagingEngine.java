@@ -5,9 +5,12 @@ import io.dist.model.MessageStatus;
 import io.dist.routing.ExchangeRoutingEngine;
 import io.dist.storage.PersistenceManager;
 import io.dist.storage.StorageService;
+import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import java.util.ArrayList;
 import java.util.List;
 import org.jboss.logging.Logger;
 
@@ -31,39 +34,43 @@ public class MessagingEngine {
     @Inject
     MetricsService metricsService;
 
-    public void publish(String exchange, String routingKey, String payload) {
-        Message template = new Message(payload, routingKey, exchange, null);
-        List<String> targetQueues = routingEngine.getTargetQueues(template);
-        
-        if (targetQueues.isEmpty()) {
-            LOG.warnf("No queues matched for exchange %s and routing key %s", exchange, routingKey);
-            return;
-        }
-
-        // Check if we are the leader before accepting publish
-        if (!raftService.isLeader()) {
-            LOG.warn("This node is not the LEADER. Rejecting publish request.");
-            throw new RuntimeException("Not the leader. Please send request to: " + raftService.getLeaderId());
-        }
-
-        for (String queueName : targetQueues) {
-            Message msg = new Message(payload, routingKey, exchange, queueName);
-            
-            // Replicate to cluster. This will also handle local persistence and enqueuing via StateMachine
-            boolean success = raftService.replicateMessage(msg);
-            if (!success) {
-                LOG.errorf("Failed to replicate message %s to cluster", msg.id);
-                throw new RuntimeException("Failed to replicate message to quorum");
+    public Uni<Void> publish(String exchange, String routingKey, String payload) {
+        // getTargetQueues queries the DB — must run on a worker thread, not the IO thread.
+        return Uni.createFrom().item(() -> {
+            Message template = new Message(payload, routingKey, exchange, null);
+            return routingEngine.getTargetQueues(template);
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool())
+        .flatMap(targetQueues -> {
+            if (targetQueues.isEmpty()) {
+                LOG.warnf("No queues matched for exchange %s and routing key %s", exchange, routingKey);
+                return Uni.createFrom().voidItem();
             }
-        }
+            if (!raftService.isLeader()) {
+                LOG.warn("This node is not the LEADER. Rejecting publish request.");
+                return Uni.createFrom().failure(new RuntimeException(
+                        "Not the leader. Please send request to: " + raftService.getLeaderId()));
+            }
+            List<Uni<Boolean>> replications = new ArrayList<>();
+            for (String queueName : targetQueues) {
+                Message msg = new Message(payload, routingKey, exchange, queueName);
+                replications.add(raftService.replicateMessage(msg));
+            }
+            return Uni.combine().all().unis(replications).with(results -> {
+                for (Object res : results) {
+                    if (!(Boolean) res) {
+                        throw new RuntimeException("Failed to replicate message to quorum");
+                    }
+                }
+                return null;
+            });
+        });
     }
 
-    @Transactional
-    public void acknowledgeMessage(String messageId) {
+    public Uni<Void> acknowledgeMessage(String messageId) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        raftService.replicateAck(messageId);
+        return raftService.replicateAck(messageId).replaceWithVoid();
     }
 
     @Transactional
@@ -76,12 +83,11 @@ public class MessagingEngine {
         }
     }
 
-    @Transactional
-    public void nackMessage(String messageId, boolean requeue) {
+    public Uni<Void> nackMessage(String messageId, boolean requeue) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        raftService.replicateNack(messageId, requeue);
+        return raftService.replicateNack(messageId, requeue).replaceWithVoid();
     }
 
     @Transactional
@@ -121,24 +127,26 @@ public class MessagingEngine {
         metricsService.incrementDLQ();
     }
     
-    public Message poll(String queueName) {
+    public Uni<Message> poll(String queueName) {
         if (!raftService.isLeader()) {
-            throw new RuntimeException("Not the leader");
+            return Uni.createFrom().failure(new RuntimeException("Not the leader"));
         }
-        metricsService.incrementPollRequests();
-        Message msg = storageService.getBuffer(queueName).dequeue();
-        if (msg != null) {
-            // Replicate the poll so other nodes also dequeue it and mark it as delivered
-            raftService.replicatePoll(queueName, msg.id);
-            
-            // Re-fetch from DB to get updated delivery count and status
-            Message updated = Message.findById(msg.id);
-            if (updated != null) {
-                return updated;
+        
+        return Uni.createFrom().item(() -> {
+            metricsService.incrementPollRequests();
+            return storageService.getBuffer(queueName).dequeue();
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool())
+        .flatMap(msg -> {
+            if (msg == null) {
+                return Uni.createFrom().nullItem();
             }
-            return msg;
-        }
-        return null;
+            return raftService.replicatePoll(queueName, msg.id)
+                .flatMap(success -> {
+                    // Re-fetch from DB. This is blocking!
+                    return Uni.createFrom().item(() -> (Message) Message.findById(msg.id))
+                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+                });
+        });
     }
 
     @Transactional

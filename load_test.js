@@ -1,135 +1,153 @@
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8080/api';
-const MODE = process.env.MODE || 'all'; // all, producer, consumer, setup
-const DELAY = parseInt(process.env.DELAY || '1000');
+const PUBLISH_DELAY = parseInt(process.env.PUBLISH_DELAY || '1000'); // ms between publishes
+const POLL_DELAY   = parseInt(process.env.POLL_DELAY   || '500');    // ms between polls
 
+// ─── topology ────────────────────────────────────────────────────────────────
+const DIRECT_EXCHANGE = 'direct-exchange';
+const FANOUT_EXCHANGE  = 'fanout-exchange';
+const DIRECT_QUEUE    = 'q-direct';
+const FANOUT_QUEUE    = 'q-fanout';
+const ROUTING_KEY     = 'order';
+
+// ─── stats ───────────────────────────────────────────────────────────────────
+const stats = {
+  published: { direct: 0, fanout: 0 },
+  consumed:  { [DIRECT_QUEUE]: 0, [FANOUT_QUEUE]: 0 },
+  acked:     { [DIRECT_QUEUE]: 0, [FANOUT_QUEUE]: 0 },
+  errors:    0,
+};
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 async function apiRequest(path, method = 'GET', body = null) {
-  const options = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-  };
-  if (body) {
-    options.body = JSON.stringify(body);
-  }
+  const options = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) options.body = JSON.stringify(body);
   try {
-    const response = await fetch(`${BASE_URL}${path}`, options);
-    if (!response.ok && response.status !== 204 && response.status !== 201) {
-      const errorText = await response.text();
-      console.error(`Error on ${method} ${path}: ${response.status} ${errorText}`);
+    const res = await fetch(`${BASE_URL}${path}`, options);
+    if (!res.ok && res.status !== 204 && res.status !== 201) {
+      const text = await res.text();
+      console.error(`[ERROR] ${method} ${path} → ${res.status} ${text}`);
+      stats.errors++;
       return null;
     }
-    if (response.status === 204 || response.status === 201) return true;
-    
-    const text = await response.text();
-    if (!text) return true;
-    return JSON.parse(text);
-  } catch (error) {
-    if (error.code === 'ECONNREFUSED' || error.message.includes('fetch failed')) {
-      throw new Error(`Connection refused to ${BASE_URL}. Is the simpleMQ server running? Use BASE_URL=http://localhost:8081/api if using docker-compose.`);
+    if (res.status === 204 || res.status === 201) return true;
+    const text = await res.text();
+    return text ? JSON.parse(text) : true;
+  } catch (err) {
+    if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed')) {
+      throw new Error(`Connection refused to ${BASE_URL}. Is simpleMQ running?`);
     }
-    throw error;
+    throw err;
   }
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─── setup ───────────────────────────────────────────────────────────────────
+async function setup() {
+  console.log('\n=== Setup ===');
+
+  await apiRequest('/management/exchanges', 'POST', { name: DIRECT_EXCHANGE, type: 'DIRECT', durable: true });
+  console.log(`  exchange: ${DIRECT_EXCHANGE} (DIRECT)`);
+
+  await apiRequest('/management/exchanges', 'POST', { name: FANOUT_EXCHANGE, type: 'FANOUT', durable: true });
+  console.log(`  exchange: ${FANOUT_EXCHANGE} (FANOUT)`);
+
+  await apiRequest('/management/queues', 'POST', { name: DIRECT_QUEUE, durable: true, autoDelete: false });
+  console.log(`  queue:    ${DIRECT_QUEUE}`);
+
+  await apiRequest('/management/queues', 'POST', { name: FANOUT_QUEUE, durable: true, autoDelete: false });
+  console.log(`  queue:    ${FANOUT_QUEUE}`);
+
+  await apiRequest('/management/bindings', 'POST', { exchangeName: DIRECT_EXCHANGE, queueName: DIRECT_QUEUE, routingKey: ROUTING_KEY });
+  console.log(`  bind:     ${DIRECT_EXCHANGE} --[${ROUTING_KEY}]--> ${DIRECT_QUEUE}`);
+
+  await apiRequest('/management/bindings', 'POST', { exchangeName: FANOUT_EXCHANGE, queueName: FANOUT_QUEUE });
+  console.log(`  bind:     ${FANOUT_EXCHANGE} --> ${FANOUT_QUEUE}`);
+
+  console.log('=== Setup complete ===\n');
+}
+
+// ─── producer ────────────────────────────────────────────────────────────────
+async function producer() {
+  let seq = 0;
+  while (true) {
+    seq++;
+    const payload = `msg-${seq} @ ${new Date().toISOString()}`;
+
+    const d = await apiRequest(`/publish/${DIRECT_EXCHANGE}`, 'POST', { routingKey: ROUTING_KEY, payload });
+    if (d) {
+      stats.published.direct++;
+      process.stdout.write(`[PROD] direct #${seq}\r`);
+    }
+
+    const f = await apiRequest(`/publish/${FANOUT_EXCHANGE}`, 'POST', { payload });
+    if (f) {
+      stats.published.fanout++;
+      process.stdout.write(`[PROD] fanout #${seq}\r`);
+    }
+
+    await sleep(PUBLISH_DELAY);
+  }
+}
+
+// ─── consumer ────────────────────────────────────────────────────────────────
+async function consumer(queue) {
+  while (true) {
+    const msg = await apiRequest(`/poll/${queue}`);
+    if (msg && typeof msg === 'object' && msg.id) {
+      stats.consumed[queue]++;
+      console.log(`[CONS:${queue}] #${stats.consumed[queue]} → "${msg.payload}"`);
+      const ok = await apiRequest(`/poll/ack/${msg.id}`, 'POST');
+      if (ok) stats.acked[queue]++;
+    }
+    await sleep(POLL_DELAY);
+  }
+}
+
+// ─── stats printer ───────────────────────────────────────────────────────────
+function startStatsPrinter() {
+  setInterval(() => {
+    console.log(
+      `\n[STATS] published: direct=${stats.published.direct} fanout=${stats.published.fanout}` +
+      ` | consumed: ${DIRECT_QUEUE}=${stats.consumed[DIRECT_QUEUE]} ${FANOUT_QUEUE}=${stats.consumed[FANOUT_QUEUE]}` +
+      ` | errors: ${stats.errors}`
+    );
+  }, 5000);
+}
+
+// ─── server probe ────────────────────────────────────────────────────────────
 async function waitForServer(retries = 10, delay = 2000) {
-  console.log(`Checking connection to ${BASE_URL}...`);
+  process.stdout.write(`Connecting to ${BASE_URL} `);
   for (let i = 0; i < retries; i++) {
     try {
       await fetch(`${BASE_URL}/management/summary`);
-      console.log(`Connected to simpleMQ at ${BASE_URL}`);
-      return true;
-    } catch (err) {
-      process.stdout.write(`.`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      console.log('✓');
+      return;
+    } catch {
+      process.stdout.write('.');
+      await sleep(delay);
     }
   }
-  console.log('\n');
-  throw new Error(`Could not connect to ${BASE_URL} after ${retries} attempts. Is the simpleMQ server running? Use BASE_URL=http://localhost:8081/api if using docker-compose.`);
+  throw new Error(`Could not connect to ${BASE_URL} after ${retries} attempts.`);
 }
 
-async function setup() {
-  console.log('--- Setting up simpleMQ ---');
-
-  // Create Direct Exchange
-  await apiRequest('/management/exchanges', 'POST', { name: 'direct-exchange', type: 'DIRECT', durable: true });
-  console.log('Created direct-exchange');
-
-  // Create Fanout Exchange
-  await apiRequest('/management/exchanges', 'POST', { name: 'fanout-exchange', type: 'FANOUT', durable: true });
-  console.log('Created fanout-exchange');
-
-  // Create Queues
-  await apiRequest('/management/queues', 'POST', { name: 'q-direct-1', queueGroup: 'group1', durable: true, autoDelete: false });
-  await apiRequest('/management/queues', 'POST', { name: 'q-direct-2', queueGroup: 'group1', durable: true, autoDelete: false });
-  await apiRequest('/management/queues', 'POST', { name: 'q-fanout-1', queueGroup: 'group2', durable: true, autoDelete: false });
-  await apiRequest('/management/queues', 'POST', { name: 'q-fanout-2', queueGroup: 'group2', durable: true, autoDelete: false });
-  console.log('Created queues');
-
-  // Bind Queues
-  await apiRequest('/management/bindings', 'POST', { exchangeName: 'direct-exchange', queueName: 'q-direct-1', routingKey: 'key1' });
-  await apiRequest('/management/bindings', 'POST', { exchangeName: 'direct-exchange', queueName: 'q-direct-2', routingKey: 'key2' });
-  await apiRequest('/management/bindings', 'POST', { exchangeName: 'fanout-exchange', queueName: 'q-fanout-1' });
-  await apiRequest('/management/bindings', 'POST', { exchangeName: 'fanout-exchange', queueName: 'q-fanout-2' });
-  console.log('Bound queues');
-  
-  console.log('--- Setup complete ---');
-}
-
-async function produce() {
-  let counter = 0;
-  while (true) {
-    counter++;
-    const payload = `Message #${counter} sent at ${new Date().toISOString()}`;
-    
-    // Publish to direct exchange
-    const routingKey = counter % 2 === 0 ? 'key1' : 'key2';
-    await apiRequest(`/publish/direct-exchange`, 'POST', { routingKey, payload });
-    console.log(`[Producer] Published to direct-exchange with key ${routingKey}`);
-
-    // Publish to fanout exchange
-    await apiRequest(`/publish/fanout-exchange`, 'POST', { payload });
-    console.log(`[Producer] Published to fanout-exchange`);
-
-    await new Promise(resolve => setTimeout(resolve, DELAY));
-  }
-}
-
-async function consume(queueName) {
-  while (true) {
-    const msg = await apiRequest(`/poll/${queueName}`);
-    if (msg && typeof msg === 'object') {
-      console.log(`[Consumer ${queueName}] Received: ${msg.payload}`);
-      await apiRequest(`/poll/ack/${msg.id}`, 'POST');
-      console.log(`[Consumer ${queueName}] Acked: ${msg.id}`);
-    } else {
-      // console.log(`[Consumer ${queueName}] No messages`);
-    }
-    await new Promise(resolve => setTimeout(resolve, DELAY / 2));
-  }
-}
-
+// ─── main ────────────────────────────────────────────────────────────────────
 async function main() {
   await waitForServer();
-  
-  if (MODE === 'setup' || MODE === 'all') {
-    await setup();
-  }
+  await setup();
 
-  const tasks = [];
-  if (MODE === 'producer' || MODE === 'all') {
-    tasks.push(produce());
-  }
-  if (MODE === 'consumer' || MODE === 'all') {
-    tasks.push(consume('q-direct-1'));
-    tasks.push(consume('q-direct-2'));
-    tasks.push(consume('q-fanout-1'));
-    tasks.push(consume('q-fanout-2'));
-  }
+  startStatsPrinter();
 
-  if (tasks.length > 0) {
-    await Promise.all(tasks);
-  }
+  console.log(`Publishing every ${PUBLISH_DELAY}ms, polling every ${POLL_DELAY}ms\n`);
+
+  await Promise.all([
+    producer(),
+    consumer(DIRECT_QUEUE),
+    consumer(FANOUT_QUEUE),
+  ]);
 }
 
 main().catch(err => {
-  console.error('Fatal error in main:', err);
+  console.error('Fatal:', err.message);
+  process.exit(1);
 });
