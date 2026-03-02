@@ -170,9 +170,9 @@ graph TD
     LB --> N1
     LB --> N2
     LB --> N3
-    N1 <--> RAFT
-    N2 <--> RAFT
-    N3 <--> RAFT
+    N1 --- RAFT
+    N2 --- RAFT
+    N3 --- RAFT
     N1 --> DB1
     N2 --> DB2
     N3 --> DB3
@@ -342,35 +342,35 @@ erDiagram
     EXCHANGE {
         string name PK
         string type
-        boolean durable
+        bool durable
     }
     QUEUE {
         string name PK
         string queueGroup
-        boolean durable
-        boolean autoDelete
+        bool durable
+        bool autoDelete
     }
     BINDING {
-        long id PK
+        int id PK
         string exchangeName FK
         string queueName FK
         string routingKey
     }
     MESSAGE {
-        long id PK
+        int id PK
         string payload
         string routingKey
         string queueName FK
         string status
         int deliveryCount
-        timestamp createdAt
-        timestamp deliveredAt
+        datetime createdAt
+        datetime deliveredAt
     }
     RAFT_METADATA {
         string nodeId PK
-        long currentTerm
-        long lastAppliedIndex
-        long lastAppliedTerm
+        int currentTerm
+        int lastAppliedIndex
+        int lastAppliedTerm
     }
 
     EXCHANGE ||--o{ BINDING : "has"
@@ -409,15 +409,13 @@ sequenceDiagram
     SCH->>ME: checkVisibilityTimeouts()
     ME->>ME: Skip if not leader
     ME->>MB: expireInFlight(timeoutMs)
-    MB-->>ME: List of expired in-flight messages
-    loop For each expired message
-        ME->>DB: findById confirm status is DELIVERED
-        alt deliveryCount below MAX_ATTEMPTS
-            ME->>DB: UPDATE status=PENDING deliveredAt=null
-            ME->>MB: enqueue copy for redelivery
-        else max attempts reached
-            ME->>DB: UPDATE status=DLQ queueName=DLQ.queue
-            ME->>MB: enqueue to DLQ buffer
-        end
+    MB-->>ME: List of expired messages
+    ME->>DB: findById and confirm status is DELIVERED
+    alt deliveryCount below MAX_ATTEMPTS
+        ME->>DB: UPDATE status to PENDING, clear deliveredAt
+        ME->>MB: enqueue copy for redelivery
+    else max attempts reached
+        ME->>DB: UPDATE status to DLQ
+        ME->>MB: enqueue to DLQ buffer
     end
 ```
