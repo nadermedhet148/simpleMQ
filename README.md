@@ -135,3 +135,259 @@ Options:
 - `BASE_URL`: The API base URL (default: `http://localhost:8080/api`).
 - `MODE`: `all`, `producer`, `consumer`, or `setup` (default: `all`).
 - `DELAY`: Delay between producer messages in ms (default: `1000`).
+
+---
+
+## High-Level Design (HLD)
+
+### System Context
+
+simpleMQ operates as a clustered message broker with three layers: a client-facing NGINX load balancer (`:8080`), a distributed 3-node broker cluster (`:8081–8083`), and a per-node SQLite storage layer. Raft consensus runs on a separate gRPC channel (`:9851–9853`).
+
+```mermaid
+graph TD
+    P[Producer]
+    C[Consumer]
+    UI[Admin UI]
+    LB[NGINX Load Balancer]
+
+    subgraph Cluster[simpleMQ Cluster]
+        N1[Node 1 Leader]
+        N2[Node 2 Follower]
+        N3[Node 3 Follower]
+        RAFT[Apache Ratis Raft Consensus]
+    end
+
+    subgraph Storage[Persistent Storage]
+        DB1[(SQLite Node 1)]
+        DB2[(SQLite Node 2)]
+        DB3[(SQLite Node 3)]
+    end
+
+    P --> LB
+    C --> LB
+    UI --> LB
+    LB --> N1
+    LB --> N2
+    LB --> N3
+    N1 <--> RAFT
+    N2 <--> RAFT
+    N3 <--> RAFT
+    N1 --> DB1
+    N2 --> DB2
+    N3 --> DB3
+```
+
+### Component Architecture
+
+Each node is a full Quarkus application composed of five internal layers. All write requests pass through the `LeaderProxyFilter` before reaching business logic.
+
+```mermaid
+graph TB
+    subgraph API[REST API Layer]
+        PR[PublishResource]
+        POR[PollingResource]
+        MR[ManagementResource]
+        CR[ClusterResource]
+        LPF[LeaderProxyFilter]
+    end
+
+    subgraph SVC[Service Layer]
+        ME[MessagingEngine]
+        QS[QueueService]
+        MetS[MetricsService]
+    end
+
+    subgraph RT[Routing Engine]
+        ERE[ExchangeRoutingEngine]
+        DIR[DirectRoutingStrategy]
+        FAN[FanoutRoutingStrategy]
+    end
+
+    subgraph CL[Cluster Layer]
+        RS[RaftService]
+        SM[SimpleStateMachine]
+    end
+
+    subgraph STR[Storage Layer]
+        SS[StorageService]
+        PM[PersistenceManager]
+    end
+
+    PR --> LPF
+    POR --> LPF
+    MR --> LPF
+    CR --> RS
+    LPF --> ME
+    LPF --> QS
+    ME --> ERE
+    ERE --> DIR
+    ERE --> FAN
+    ME --> RS
+    QS --> RS
+    RS --> SM
+    SM --> ME
+    SM --> QS
+    SM --> SS
+    SM --> PM
+    ME --> MetS
+```
+
+---
+
+## Low-Level Design (LLD)
+
+### Message Routing Model
+
+A message is published to an **Exchange** with a routing key. The exchange type determines which bound queues receive it.
+
+```mermaid
+flowchart LR
+    PUB[Publish to Exchange with routingKey]
+    EX{Exchange Type}
+    DIR[Match exact routingKey against bindings]
+    FAN[Broadcast to all bound queues]
+    STORE[Enqueue into target queues via Raft]
+
+    PUB --> EX
+    EX -->|DIRECT| DIR
+    EX -->|FANOUT| FAN
+    DIR --> STORE
+    FAN --> STORE
+```
+
+### Message Publish Flow
+
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant LB as NGINX
+    participant LE as Leader Node
+    participant RA as Apache Ratis
+    participant SM as State Machine
+    participant DB as SQLite
+    participant MB as Memory Buffer
+
+    P->>LB: POST /api/publish/{exchange}
+    LB->>LE: Forward to leader
+    LE->>LE: ExchangeRoutingEngine resolves target queues
+    LE->>RA: replicateMessage command
+    RA->>SM: applyTransaction on quorum nodes
+    SM->>DB: INSERT message record
+    SM->>MB: enqueue message in-memory
+    SM-->>RA: SUCCESS
+    RA-->>LE: Quorum confirmed
+    LE-->>P: 200 OK
+```
+
+### Message Consume and Acknowledgment Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Consumer
+    participant LB as NGINX
+    participant LE as Leader Node
+    participant RA as Apache Ratis
+    participant SM as State Machine
+    participant MB as Memory Buffer
+    participant DB as SQLite
+
+    C->>LB: GET /api/poll/{queue}
+    LB->>LE: Forward to leader
+    LE->>MB: dequeue next PENDING message
+    MB-->>LE: Message
+    LE->>RA: replicatePoll queue and messageId
+    RA->>SM: applyTransaction POLL command
+    SM->>DB: UPDATE status to DELIVERED
+    SM-->>RA: SUCCESS
+    LE-->>C: 200 OK with message payload
+
+    C->>LE: POST /api/poll/ack/{msgId}
+    LE->>RA: replicateAck messageId
+    RA->>SM: applyTransaction ACK command
+    SM->>DB: UPDATE status to ACKED
+    SM-->>RA: SUCCESS
+    LE-->>C: 200 OK
+```
+
+### Leader Proxy and Transparent Failover
+
+Write requests hitting a follower are automatically intercepted and forwarded to the current leader. The client receives the response transparently.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant FO as Follower Node
+    participant LPF as LeaderProxyFilter
+    participant LE as Leader Node
+    participant RA as Apache Ratis
+    participant SM as State Machine
+
+    C->>FO: Write Request
+    FO->>LPF: Intercept request
+    LPF->>LPF: isLeader is false
+    LPF->>LE: HTTP proxy to leader address
+    LE->>RA: Replicate command
+    RA->>SM: Apply on all nodes
+    SM-->>RA: SUCCESS
+    RA-->>LE: Quorum confirmed
+    LE-->>FO: Response
+    FO-->>C: Transparent response to client
+```
+
+### Data Model
+
+```mermaid
+erDiagram
+    EXCHANGE {
+        string name PK
+        string type
+        boolean durable
+    }
+    QUEUE {
+        string name PK
+        string queueGroup
+        boolean durable
+        boolean autoDelete
+    }
+    BINDING {
+        long id PK
+        string exchangeName FK
+        string queueName FK
+        string routingKey
+    }
+    MESSAGE {
+        long id PK
+        string payload
+        string routingKey
+        string queueName FK
+        string status
+        int deliveryCount
+        timestamp createdAt
+    }
+    RAFT_METADATA {
+        string nodeId PK
+        long currentTerm
+        long lastAppliedIndex
+        long lastAppliedTerm
+    }
+
+    EXCHANGE ||--o{ BINDING : "has"
+    QUEUE ||--o{ BINDING : "has"
+    QUEUE ||--o{ MESSAGE : "contains"
+```
+
+### Message Lifecycle State Machine
+
+Messages pass through a defined set of states from publish to final resolution. A NACK re-enqueues the message up to 3 delivery attempts before routing it to a Dead Letter Queue (`DLQ.<queue_name>`).
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : Published via Raft
+    PENDING --> DELIVERED : Consumer polls
+    DELIVERED --> ACKED : ACK received
+    DELIVERED --> PENDING : NACK with requeue and attempts below max
+    DELIVERED --> DLQ : NACK without requeue or max attempts reached
+    ACKED --> [*]
+    DLQ --> [*]
+```
