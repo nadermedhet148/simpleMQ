@@ -23,13 +23,52 @@ import java.util.Base64;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Raft state machine implementation for simpleMQ.
+ *
+ * <p>This class is the core of the replicated state: every committed Raft log
+ * entry is applied here on <b>every</b> node in the cluster, ensuring that all
+ * nodes converge to the same state. The state machine processes pipe-delimited
+ * command strings that represent broker operations.</p>
+ *
+ * <h3>Supported Commands</h3>
+ * <ul>
+ *   <li>{@code PUBLISH|id|payload|routingKey|exchange|queue|timestamp} – persist
+ *       and enqueue a new message</li>
+ *   <li>{@code POLL|queueName|messageId} – mark a message as delivered</li>
+ *   <li>{@code ACK|messageId} – acknowledge a message</li>
+ *   <li>{@code NACK|messageId|requeue} – negatively acknowledge a message</li>
+ *   <li>{@code CREATE_EXCHANGE|name|type|durable} – create an exchange</li>
+ *   <li>{@code DELETE_EXCHANGE|name} – delete an exchange</li>
+ *   <li>{@code CREATE_QUEUE|name|group|durable|autoDelete} – create a queue</li>
+ *   <li>{@code DELETE_QUEUE|name} – delete a queue</li>
+ *   <li>{@code BIND|exchange|queue|routingKey} – bind a queue to an exchange</li>
+ *   <li>{@code UNBIND|exchange|queue|routingKey} – unbind a queue from an exchange</li>
+ * </ul>
+ *
+ * <h3>Threading</h3>
+ * <p>All database writes are serialized through a single-threaded executor
+ * ({@code SM_EXECUTOR}) because SQLite only supports one concurrent write
+ * transaction. This prevents "database is locked" errors when multiple Raft
+ * log entries are applied concurrently.</p>
+ *
+ * <h3>Recovery</h3>
+ * <p>The last applied log index and term are persisted to the
+ * {@link RaftMetadata} table after each transaction, allowing the state
+ * machine to resume from the correct position after a restart.</p>
+ *
+ * @see RaftService
+ * @see RaftMetadata
+ */
 public class SimpleStateMachine extends BaseStateMachine {
     private static final Logger LOG = Logger.getLogger(SimpleStateMachine.class);
 
-    // Single-threaded executor so all state-machine DB writes are serialized.
-    // Multiple applyTransaction() calls running concurrently on the worker pool
-    // cause SQLite "database is locked" errors because SQLite only allows one
-    // write transaction at a time.
+    /**
+     * Single-threaded executor that serializes all state-machine DB writes.
+     * Multiple concurrent applyTransaction() calls on the worker pool would
+     * cause SQLite "database is locked" errors because SQLite only allows one
+     * write transaction at a time.
+     */
     private static final java.util.concurrent.ExecutorService SM_EXECUTOR =
         java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "raft-sm-executor");
@@ -37,14 +76,15 @@ public class SimpleStateMachine extends BaseStateMachine {
             return t;
         });
 
+    /** Cached node ID, lazily resolved from RaftService via CDI. */
     private String nodeId;
 
     public SimpleStateMachine() {
-        // We will initialize nodeId from RaftService if possible, or just use a default
-        // But in Quarkus, we can't easily inject into StateMachine if it's created by new
-        // So we will get it from Config or RaftService via CDI
+        // Node ID is resolved lazily via CDI because this class is instantiated
+        // by the Raft framework (not by CDI), so constructor injection is unavailable.
     }
 
+    /** Lazily resolves the node ID from the CDI-managed RaftService. */
     private String getNodeId() {
         if (nodeId == null) {
             nodeId = CDI.current().select(RaftService.class).get().getNodeId();
@@ -52,14 +92,23 @@ public class SimpleStateMachine extends BaseStateMachine {
         return nodeId;
     }
 
+    /** Obtains the PersistenceManager from CDI. */
     private PersistenceManager getPersistenceManager() {
         return CDI.current().select(PersistenceManager.class).get();
     }
 
+    /** Obtains the StorageService from CDI. */
     private StorageService getStorageService() {
         return CDI.current().select(StorageService.class).get();
     }
 
+    /**
+     * Recovers the last applied term index from SQLite on startup.
+     * This allows the Raft server to skip already-applied log entries
+     * after a restart.
+     *
+     * @return the last applied term index, or the superclass default if not found
+     */
     @Override
     public TermIndex getLastAppliedTermIndex() {
         try {
@@ -77,18 +126,31 @@ public class SimpleStateMachine extends BaseStateMachine {
         }
     }
 
+    /** Obtains the QueueService from CDI. */
     private QueueService getQueueService() {
         return CDI.current().select(QueueService.class).get();
     }
 
+    /** Obtains the MessagingEngine from CDI. */
     private MessagingEngine getMessagingEngine() {
         return CDI.current().select(MessagingEngine.class).get();
     }
 
+    /** Obtains the MetricsService from CDI. */
     private MetricsService getMetricsService() {
         return CDI.current().select(MetricsService.class).get();
     }
 
+    /**
+     * Applies a committed Raft log entry to the local state.
+     *
+     * <p>Parses the pipe-delimited command string and delegates to the
+     * appropriate service method. After successful application the last
+     * applied index and term are persisted to {@link RaftMetadata}.</p>
+     *
+     * @param trx the transaction context containing the log entry
+     * @return a future that completes with a SUCCESS or FAILURE message
+     */
     @Override
     public CompletableFuture<org.apache.ratis.protocol.Message> applyTransaction(TransactionContext trx) {
         return CompletableFuture.supplyAsync(() -> {
@@ -98,9 +160,11 @@ public class SimpleStateMachine extends BaseStateMachine {
             LOG.infof("Applying transaction: %s at index %d (Thread: %s)", command, index, Thread.currentThread().getName());
 
             try {
+                // Parse the pipe-delimited command
                 String[] parts = command.split("\\|", -1);
                 String type = parts[0];
                 
+                // Dispatch to the appropriate handler based on command type
                 if (type.equals("PUBLISH")) {
                     Message msg = new Message();
                     msg.id = parts[1];
@@ -136,7 +200,7 @@ public class SimpleStateMachine extends BaseStateMachine {
                     getQueueService().unbindLocal(parts[1], parts[2], decodeValue(parts[3]));
                 }
 
-                // Update last applied index in RaftMetadata
+                // Persist the last applied index/term for crash recovery
                 QuarkusTransaction.requiringNew().run(() -> {
                     RaftMetadata metadata = RaftMetadata.findById(getNodeId());
                     if (metadata == null) {
@@ -159,6 +223,15 @@ public class SimpleStateMachine extends BaseStateMachine {
         }, SM_EXECUTOR);
     }
 
+    /**
+     * Decodes a Base64-encoded value back to a plain string.
+     * Returns {@code null} for null or "null" inputs. Falls back to returning
+     * the raw value if Base64 decoding fails (for backward compatibility with
+     * older non-encoded messages).
+     *
+     * @param value the Base64-encoded string (or "null")
+     * @return the decoded string, or {@code null}
+     */
     private String decodeValue(String value) {
         if (value == null || value.equals("null")) {
             return null;

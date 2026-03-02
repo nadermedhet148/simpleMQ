@@ -9,6 +9,22 @@ import jakarta.transaction.Transactional;
 import java.util.List;
 import org.jboss.logging.Logger;
 
+/**
+ * Manages message persistence to SQLite and recovery on broker startup.
+ *
+ * <p>On application start this manager queries the database for any messages
+ * that were not fully processed (i.e. not {@code ACKED} or {@code DLQ}) and
+ * re-enqueues them into the corresponding {@link InMemoryBuffer}s. Messages
+ * that were in {@code DELIVERED} state (polled but never ACKed/NACKed) are
+ * reset to {@code PENDING} so they can be redelivered.</p>
+ *
+ * <p>Persistence can be disabled via the {@code simplemq.persistence.enabled}
+ * configuration property (defaults to {@code true}). When disabled the broker
+ * runs in ephemeral mode and skips recovery on startup.</p>
+ *
+ * @see StorageService
+ * @see io.dist.service.MessagingEngine
+ */
 @ApplicationScoped
 public class PersistenceManager {
     private static final Logger LOG = Logger.getLogger(PersistenceManager.class);
@@ -19,6 +35,12 @@ public class PersistenceManager {
     @org.eclipse.microprofile.config.inject.ConfigProperty(name = "simplemq.persistence.enabled", defaultValue = "true")
     boolean persistenceEnabled;
 
+    /**
+     * Startup hook: recovers unprocessed messages from the database when
+     * persistence is enabled. Triggered automatically by Quarkus on application start.
+     *
+     * @param ev the startup event
+     */
     void onStart(@Observes StartupEvent ev) {
         if (persistenceEnabled) {
             LOG.info("Broker starting, recovering messages from database...");
@@ -28,16 +50,30 @@ public class PersistenceManager {
         }
     }
 
+    /**
+     * Returns whether disk persistence is enabled for this broker instance.
+     *
+     * @return {@code true} if persistence is enabled
+     */
     public boolean isPersistenceEnabled() {
         return persistenceEnabled;
     }
 
+    /**
+     * Queries the database for all messages that are not yet {@code ACKED} or
+     * in the {@code DLQ}, and re-enqueues them into their respective in-memory
+     * buffers. Messages with {@code DELIVERED} status are reset to
+     * {@code PENDING} since the original consumer is assumed to be gone after
+     * a restart.
+     */
     @Transactional
     public void recoverMessages() {
         try {
             List<Message> messages = Message.list("status != ?1 and status != ?2", io.dist.model.MessageStatus.ACKED, io.dist.model.MessageStatus.DLQ);
             LOG.info("Found " + messages.size() + " messages in database for recovery.");
             for (Message message : messages) {
+                // Reset DELIVERED → PENDING since the consumer that held the message
+                // is no longer connected after a broker restart.
                 if (message.status == io.dist.model.MessageStatus.DELIVERED) {
                     message.status = io.dist.model.MessageStatus.PENDING;
                 }
@@ -48,6 +84,13 @@ public class PersistenceManager {
         }
     }
 
+    /**
+     * Persists a message to the SQLite database.
+     * If a message with the same ID already exists the call is silently skipped
+     * (idempotent save).
+     *
+     * @param message the message to persist
+     */
     @Transactional
     public void saveMessage(Message message) {
         if (Message.findById(message.id) == null) {
@@ -57,6 +100,11 @@ public class PersistenceManager {
         }
     }
 
+    /**
+     * Removes a message from the database by its ID.
+     *
+     * @param messageId the ID of the message to delete
+     */
     @Transactional
     public void removeMessage(String messageId) {
         Message.deleteById(messageId);
