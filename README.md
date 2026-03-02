@@ -384,13 +384,14 @@ Messages pass through a defined set of states from publish to final resolution. 
 
 ```mermaid
 stateDiagram-v2
+    state RetryCheck <<choice>>
+
     [*] --> PENDING : Published via Raft
     PENDING --> DELIVERED : Consumer polls
     DELIVERED --> ACKED : ACK received
-    DELIVERED --> PENDING : NACK with requeue and attempts below max
-    DELIVERED --> PENDING : Visibility timeout expires and attempts below max
-    DELIVERED --> DLQ : NACK without requeue or max attempts reached
-    DELIVERED --> DLQ : Visibility timeout expires and max attempts reached
+    DELIVERED --> RetryCheck : NACK with requeue or visibility timeout
+    RetryCheck --> PENDING : attempts below max
+    RetryCheck --> DLQ : max attempts reached
     ACKED --> [*]
     DLQ --> [*]
 ```
