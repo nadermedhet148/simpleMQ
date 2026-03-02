@@ -16,6 +16,10 @@ public class StorageService {
         buffers.remove(queueName);
     }
 
+    public Map<String, InMemoryBuffer> getAllBuffers() {
+        return buffers;
+    }
+
     public void clear() {
         buffers.clear();
     }

@@ -3,15 +3,20 @@ package io.dist.service;
 import io.dist.model.Message;
 import io.dist.model.MessageStatus;
 import io.dist.routing.ExchangeRoutingEngine;
+import io.dist.storage.InMemoryBuffer;
 import io.dist.storage.PersistenceManager;
 import io.dist.storage.StorageService;
+import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 @ApplicationScoped
@@ -33,6 +38,9 @@ public class MessagingEngine {
 
     @Inject
     MetricsService metricsService;
+
+    @ConfigProperty(name = "simplemq.visibility.timeout-ms", defaultValue = "30000")
+    long visibilityTimeoutMs;
 
     public Uni<Void> publish(String exchange, String routingKey, String payload) {
         // getTargetQueues queries the DB — must run on a worker thread, not the IO thread.
@@ -78,8 +86,11 @@ public class MessagingEngine {
         Message msg = Message.findById(messageId);
         if (msg != null) {
             msg.status = MessageStatus.ACKED;
+            msg.deliveredAt = null;
             LOG.infof("Message %s acknowledged", messageId);
             metricsService.incrementAcked();
+            // Remove from in-flight tracking
+            storageService.getBuffer(msg.queueName).removeFromInFlight(messageId);
         }
     }
 
@@ -96,8 +107,12 @@ public class MessagingEngine {
         if (msg == null) return;
 
         metricsService.incrementNacked();
+        // Remove from in-flight tracking
+        storageService.getBuffer(msg.queueName).removeFromInFlight(messageId);
+
         if (requeue && msg.deliveryCount < MAX_DELIVERY_ATTEMPTS) {
             msg.status = MessageStatus.PENDING;
+            msg.deliveredAt = null;
             
             // Enqueue a fresh copy to avoid Hibernate session issues when polling
             Message copy = new Message();
@@ -120,6 +135,7 @@ public class MessagingEngine {
     @Transactional
     public void routeToDLQ(Message msg) {
         msg.status = MessageStatus.DLQ;
+        msg.deliveredAt = null;
         String dlqName = "DLQ." + (msg.queueName != null ? msg.queueName : "unknown");
         msg.queueName = dlqName;
         storageService.getBuffer(dlqName).enqueue(msg);
@@ -161,7 +177,60 @@ public class MessagingEngine {
 
     @Transactional
     public void markAsDelivered(String messageId) {
-        Message.update("status = ?1, deliveryCount = deliveryCount + 1 where id = ?2", 
-                MessageStatus.DELIVERED, messageId);
+        Message msg = Message.findById(messageId);
+        if (msg != null) {
+            msg.status = MessageStatus.DELIVERED;
+            msg.deliveryCount = msg.deliveryCount + 1;
+            msg.deliveredAt = LocalDateTime.now();
+        }
+    }
+
+    /**
+     * Scheduled task that checks all in-flight messages across all queues.
+     * Messages that have exceeded the visibility timeout without being ACKed or NACKed
+     * are automatically requeued so another consumer can pick them up.
+     * If max delivery attempts are exceeded, the message is routed to the DLQ.
+     */
+    @Scheduled(every = "5s", identity = "visibility-timeout-checker")
+    public void checkVisibilityTimeouts() {
+        if (!raftService.isLeader()) {
+            return;
+        }
+        for (Map.Entry<String, InMemoryBuffer> entry : storageService.getAllBuffers().entrySet()) {
+            String queueName = entry.getKey();
+            InMemoryBuffer buffer = entry.getValue();
+            List<Message> expired = buffer.expireInFlight(visibilityTimeoutMs);
+            for (Message msg : expired) {
+                LOG.infof("Message %s in queue %s exceeded visibility timeout, requeuing", msg.id, queueName);
+                redeliverExpiredMessage(msg, queueName);
+            }
+        }
+    }
+
+    @Transactional
+    void redeliverExpiredMessage(Message expiredMsg, String queueName) {
+        Message msg = Message.findById(expiredMsg.id);
+        if (msg == null || msg.status != MessageStatus.DELIVERED) {
+            return;
+        }
+        if (msg.deliveryCount >= MAX_DELIVERY_ATTEMPTS) {
+            routeToDLQ(msg);
+        } else {
+            msg.status = MessageStatus.PENDING;
+            msg.deliveredAt = null;
+
+            Message copy = new Message();
+            copy.id = msg.id;
+            copy.payload = msg.payload;
+            copy.routingKey = msg.routingKey;
+            copy.exchange = msg.exchange;
+            copy.queueName = msg.queueName;
+            copy.timestamp = msg.timestamp;
+            copy.deliveryCount = msg.deliveryCount;
+            copy.status = MessageStatus.PENDING;
+
+            storageService.getBuffer(queueName).enqueue(copy);
+            LOG.infof("Message %s requeued after visibility timeout expiry", msg.id);
+        }
     }
 }

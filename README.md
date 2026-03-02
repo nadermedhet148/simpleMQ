@@ -364,6 +364,7 @@ erDiagram
         string status
         int deliveryCount
         timestamp createdAt
+        timestamp deliveredAt
     }
     RAFT_METADATA {
         string nodeId PK
@@ -379,7 +380,7 @@ erDiagram
 
 ### Message Lifecycle State Machine
 
-Messages pass through a defined set of states from publish to final resolution. A NACK re-enqueues the message up to 3 delivery attempts before routing it to a Dead Letter Queue (`DLQ.<queue_name>`).
+Messages pass through a defined set of states from publish to final resolution. A NACK or an expired visibility timeout re-enqueues the message up to 3 delivery attempts before routing it to a Dead Letter Queue (`DLQ.<queue_name>`).
 
 ```mermaid
 stateDiagram-v2
@@ -387,7 +388,36 @@ stateDiagram-v2
     PENDING --> DELIVERED : Consumer polls
     DELIVERED --> ACKED : ACK received
     DELIVERED --> PENDING : NACK with requeue and attempts below max
+    DELIVERED --> PENDING : Visibility timeout expires and attempts below max
     DELIVERED --> DLQ : NACK without requeue or max attempts reached
+    DELIVERED --> DLQ : Visibility timeout expires and max attempts reached
     ACKED --> [*]
     DLQ --> [*]
+```
+
+### Visibility Timeout and Automatic Redelivery
+
+If a consumer polls a message but never sends ACK or NACK (e.g. crashes or stalls), the message would be lost without this mechanism. The leader runs a scheduler every 5 seconds that inspects all in-flight messages and requeues any that have exceeded the visibility timeout (default 30 seconds, configurable via `simplemq.visibility.timeout-ms`).
+
+```mermaid
+sequenceDiagram
+    participant SCH as Scheduler every 5s
+    participant ME as MessagingEngine
+    participant MB as InMemoryBuffer
+    participant DB as SQLite
+
+    SCH->>ME: checkVisibilityTimeouts()
+    ME->>ME: Skip if not leader
+    ME->>MB: expireInFlight(timeoutMs)
+    MB-->>ME: List of expired in-flight messages
+    loop For each expired message
+        ME->>DB: findById confirm status is DELIVERED
+        alt deliveryCount below MAX_ATTEMPTS
+            ME->>DB: UPDATE status=PENDING deliveredAt=null
+            ME->>MB: enqueue copy for redelivery
+        else max attempts reached
+            ME->>DB: UPDATE status=DLQ queueName=DLQ.queue
+            ME->>MB: enqueue to DLQ buffer
+        end
+    end
 ```

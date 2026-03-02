@@ -24,6 +24,7 @@ public class Message extends PanacheEntityBase {
     public String exchange;
     public String queueName;
     public LocalDateTime timestamp;
+    public LocalDateTime deliveredAt;
     public int deliveryCount;
     public MessageStatus status;
 
