@@ -256,8 +256,12 @@ public class MessagingEngine {
             return raftService.replicatePoll(queueName, msg.id)
                 .flatMap(success -> {
                     // Re-fetch the message from DB to get the updated DELIVERED status
-                    return Uni.createFrom().item(() -> (Message) Message.findById(msg.id))
-                        .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+                    // Use a new transaction to ensure we see the committed changes from pollLocal
+                    return Uni.createFrom().item(() -> {
+                        return io.quarkus.narayana.jta.QuarkusTransaction.requiringNew().call(() -> {
+                            return (Message) Message.findById(msg.id);
+                        });
+                    }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
                 });
         });
     }
@@ -338,7 +342,7 @@ public class MessagingEngine {
      * @param queueName  the queue the message belongs to
      */
     @Transactional
-    void redeliverExpiredMessage(Message expiredMsg, String queueName) {
+    public void redeliverExpiredMessage(Message expiredMsg, String queueName) {
         // Re-fetch from DB to get the latest state
         Message msg = Message.findById(expiredMsg.id);
         if (msg == null || msg.status != MessageStatus.DELIVERED) {

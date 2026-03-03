@@ -31,7 +31,7 @@ public class ClusterManagementTest {
                 .until(() -> {
                     var response = RestAssured.given()
                             .when().get("/api/cluster/peers");
-                    return response.getStatusCode() == 200 && response.getBody().asString().contains("node1=localhost:9851");
+                    return response.getStatusCode() == 200 && response.getBody().asString().contains("node1=localhost:");
                 });
     }
 

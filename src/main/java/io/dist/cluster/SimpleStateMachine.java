@@ -112,18 +112,21 @@ public class SimpleStateMachine extends BaseStateMachine {
     @Override
     public TermIndex getLastAppliedTermIndex() {
         try {
-            return QuarkusTransaction.requiringNew().call(() -> {
+            TermIndex result = QuarkusTransaction.requiringNew().call(() -> {
                 RaftMetadata metadata = RaftMetadata.findById(getNodeId());
                 if (metadata != null && metadata.lastAppliedIndex != null && metadata.lastAppliedIndex >= 0) {
                     LOG.infof("Recovered last applied index %d, term %d from SQLite", metadata.lastAppliedIndex, metadata.lastAppliedTerm);
                     return TermIndex.valueOf(metadata.lastAppliedTerm, metadata.lastAppliedIndex);
                 }
-                return super.getLastAppliedTermIndex();
+                return null;
             });
+            if (result != null) {
+                return result;
+            }
         } catch (Exception e) {
             LOG.error("Failed to recover last applied index from SQLite", e);
-            return super.getLastAppliedTermIndex();
         }
+        return super.getLastAppliedTermIndex();
     }
 
     /** Obtains the QueueService from CDI. */

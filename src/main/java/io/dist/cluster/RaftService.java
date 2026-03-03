@@ -136,8 +136,8 @@ public class RaftService {
 
         RaftProperties properties = new RaftProperties();
         
-        // Use in-memory Raft logs to avoid file storage for logs
-        RaftServerConfigKeys.Log.setUseMemory(properties, true);
+        // Use file-based Raft logs for proper commit tracking
+        RaftServerConfigKeys.Log.setUseMemory(properties, false);
         
         final int port = extractPort(address);
         GrpcConfigKeys.Server.setPort(properties, port);
@@ -191,6 +191,9 @@ public class RaftService {
 
         this.sharedClient = buildClient(raftGroup);
         LOG.infof("Raft shared client initialized for node %s", nodeId);
+
+        // Wait for leader election before accepting requests
+        waitForLeader(30000);
         
         // Start periodic metadata sync and leadership logging
         startSyncAndLogging();

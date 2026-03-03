@@ -72,7 +72,7 @@ public class Message extends PanacheEntityBase {
      * Optional key-value headers attached to the message.
      * Stored in a separate {@code message_headers} collection table.
      */
-    @ElementCollection
+    @ElementCollection(fetch = jakarta.persistence.FetchType.EAGER)
     @CollectionTable(name = "message_headers", joinColumns = @JoinColumn(name = "message_id"))
     @MapKeyColumn(name = "header_key")
     @Column(name = "header_value")

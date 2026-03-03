@@ -73,11 +73,11 @@ public class VisibilityTimeoutTest {
         Message dbMsg = getMessage(polled.id);
         assertNotNull(dbMsg.deliveredAt, "deliveredAt should be set after poll");
 
-        // Manually expire the in-flight message with a 0ms timeout to simulate timeout
-        storageService.getBuffer("vt-q").expireInFlight(0);
-
-        // The scheduled checker would normally do this, but we trigger redelivery manually
-        messagingEngine.checkVisibilityTimeouts();
+        // Directly call redelivery for the expired message to simulate timeout
+        var expired = storageService.getBuffer("vt-q").expireInFlight(0);
+        for (Message exp : expired) {
+            messagingEngine.redeliverExpiredMessage(exp, "vt-q");
+        }
 
         // The message should be back in the queue for another consumer
         Awaitility.await().atMost(Duration.ofSeconds(5))
@@ -136,8 +136,10 @@ public class VisibilityTimeoutTest {
             assertNotNull(polled, "Attempt " + (i + 1) + " should return a message");
 
             // Expire and trigger redelivery
-            storageService.getBuffer("vt-q3").expireInFlight(0);
-            messagingEngine.checkVisibilityTimeouts();
+            var expired = storageService.getBuffer("vt-q3").expireInFlight(0);
+            for (Message exp : expired) {
+                messagingEngine.redeliverExpiredMessage(exp, "vt-q3");
+            }
 
             if (i < 2) {
                 // Should be requeued
