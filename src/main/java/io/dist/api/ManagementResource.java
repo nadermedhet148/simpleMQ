@@ -80,11 +80,17 @@ public class ManagementResource {
                 })
                 .map(queues -> {
                     summary.queues = queues.stream()
-                            .map(q -> new ManagementSummary.QueueInfo(
-                                    q.name,
-                                    q.queueGroup,
-                                    storageService.getBuffer(q.name).size(),
-                                    q.durable))
+                            .map(q -> {
+                                int count = (q.queueType == io.dist.model.QueueType.STREAM)
+                                        ? (int) storageService.getStreamBuffer(q.name).size()
+                                        : storageService.getBuffer(q.name).size();
+                                return new ManagementSummary.QueueInfo(
+                                        q.name,
+                                        q.queueGroup,
+                                        count,
+                                        q.durable,
+                                        q.queueType != null ? q.queueType.name() : "STANDARD");
+                            })
                             .collect(Collectors.toList());
                     summary.metrics = metricsService.getMetrics();
                     return summary;
@@ -152,7 +158,7 @@ public class ManagementResource {
     @POST
     @Path("/queues")
     public Uni<Response> createQueue(Queue queue) {
-        return queueService.createQueue(queue.name, queue.queueGroup, queue.durable, queue.autoDelete)
+        return queueService.createQueue(queue.name, queue.queueGroup, queue.durable, queue.autoDelete, queue.queueType)
                 .replaceWith(Response.status(Response.Status.CREATED).build());
     }
 

@@ -2,6 +2,8 @@ package io.dist.cluster;
 
 import io.dist.model.Message;
 import io.dist.model.MessageStatus;
+import io.dist.model.QueueType;
+import io.dist.model.StreamConsumerOffset;
 import io.dist.storage.PersistenceManager;
 import io.dist.storage.StorageService;
 import io.dist.service.MessagingEngine;
@@ -144,6 +146,11 @@ public class SimpleStateMachine extends BaseStateMachine {
         return CDI.current().select(MetricsService.class).get();
     }
 
+    /** Obtains the ProcessorService from CDI. */
+    private io.dist.service.ProcessorService getProcessorService() {
+        return CDI.current().select(io.dist.service.ProcessorService.class).get();
+    }
+
     /**
      * Applies a committed Raft log entry to the local state.
      *
@@ -181,7 +188,24 @@ public class SimpleStateMachine extends BaseStateMachine {
 
                     LOG.infof("Processing message %s for queue %s", msg.id, msg.queueName);
                     getPersistenceManager().saveMessage(msg);
-                    getStorageService().getBuffer(msg.queueName).enqueue(msg);
+
+                    // Route to StreamBuffer for STREAM queues, InMemoryBuffer for STANDARD
+                    boolean isStream = QuarkusTransaction.requiringNew().call(() -> {
+                        io.dist.model.Queue queue = io.dist.model.Queue.findById(msg.queueName);
+                        return queue != null && queue.queueType == QueueType.STREAM;
+                    });
+
+                    if (isStream) {
+                        long offset = getStorageService().getStreamBuffer(msg.queueName).enqueue(msg);
+                        QuarkusTransaction.requiringNew().run(() -> {
+                            Message dbMsg = Message.findById(msg.id);
+                            if (dbMsg != null) {
+                                dbMsg.streamOffset = offset;
+                            }
+                        });
+                    } else {
+                        getStorageService().getBuffer(msg.queueName).enqueue(msg);
+                    }
                     getMetricsService().incrementPublished();
                 } else if (type.equals("POLL")) {
                     getMessagingEngine().pollLocal(parts[1], parts[2]);
@@ -194,13 +218,42 @@ public class SimpleStateMachine extends BaseStateMachine {
                 } else if (type.equals("DELETE_EXCHANGE")) {
                     getQueueService().deleteExchangeLocal(parts[1]);
                 } else if (type.equals("CREATE_QUEUE")) {
-                    getQueueService().createQueueLocal(parts[1], parts[2], Boolean.parseBoolean(parts[3]), Boolean.parseBoolean(parts[4]));
+                    // Format: CREATE_QUEUE|name|group|durable|autoDelete[|queueType]
+                    QueueType queueType = parts.length >= 6 ? QueueType.valueOf(parts[5]) : QueueType.STANDARD;
+                    getQueueService().createQueueLocal(parts[1], parts[2], Boolean.parseBoolean(parts[3]), Boolean.parseBoolean(parts[4]), queueType);
+                } else if (type.equals("UPDATE_STREAM_OFFSET")) {
+                    updateStreamOffsetLocal(parts[1], parts[2], Long.parseLong(parts[3]));
                 } else if (type.equals("DELETE_QUEUE")) {
                     getQueueService().deleteQueueLocal(parts[1]);
                 } else if (type.equals("BIND")) {
                     getQueueService().bindLocal(parts[1], parts[2], decodeValue(parts[3]));
                 } else if (type.equals("UNBIND")) {
                     getQueueService().unbindLocal(parts[1], parts[2], decodeValue(parts[3]));
+                } else if (type.equals("CREATE_PROCESSOR")) {
+                    // CREATE_PROCESSOR|id|name|sourceQueue|encodedFilter|targetExchange|
+                    //                  encodedRoutingKey|aggType|encodedAggField|encodedAggGroupBy
+                    io.dist.model.StreamProcessor sp = new io.dist.model.StreamProcessor();
+                    sp.id = parts[1];
+                    sp.name = parts[2];
+                    sp.sourceQueue = parts[3];
+                    sp.filterExpression = decodeValue(parts[4]);
+                    sp.targetExchange = parts[5];
+                    sp.targetRoutingKey = decodeValue(parts[6]);
+                    sp.aggregationType = parts[7].equals("null") ? null
+                            : io.dist.model.AggregationType.valueOf(parts[7]);
+                    sp.aggregationField = decodeValue(parts[8]);
+                    sp.aggregationGroupBy = decodeValue(parts[9]);
+                    sp.status = io.dist.model.ProcessorStatus.RUNNING;
+                    sp.createdAt = java.time.LocalDateTime.now();
+                    getProcessorService().createProcessorLocal(sp);
+                } else if (type.equals("PAUSE_PROCESSOR")) {
+                    getProcessorService().pauseProcessorLocal(parts[1]);
+                } else if (type.equals("RESUME_PROCESSOR")) {
+                    getProcessorService().resumeProcessorLocal(parts[1]);
+                } else if (type.equals("DELETE_PROCESSOR")) {
+                    getProcessorService().deleteProcessorLocal(parts[1]);
+                } else if (type.equals("UPDATE_PROCESSOR_STATE")) {
+                    getProcessorService().updateProcessorStateLocal(parts[1], parts[2], decodeValue(parts[3]));
                 }
 
                 // Persist the last applied index/term for crash recovery
@@ -224,6 +277,22 @@ public class SimpleStateMachine extends BaseStateMachine {
 
             return org.apache.ratis.protocol.Message.valueOf("SUCCESS");
         }, SM_EXECUTOR);
+    }
+
+    /**
+     * Persists an updated stream consumer offset on this node.
+     * Called by the state machine when an {@code UPDATE_STREAM_OFFSET} command is applied.
+     *
+     * @param consumerId the consumer identifier
+     * @param queueName  the stream queue name
+     * @param offset     the new next-offset value
+     */
+    private void updateStreamOffsetLocal(String consumerId, String queueName, long offset) {
+        QuarkusTransaction.requiringNew().run(() -> {
+            StreamConsumerOffset record = StreamConsumerOffset.getOrCreate(consumerId, queueName);
+            record.nextOffset = offset;
+            record.persist();
+        });
     }
 
     /**

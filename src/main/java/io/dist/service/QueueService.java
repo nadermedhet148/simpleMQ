@@ -4,6 +4,7 @@ import io.dist.model.Binding;
 import io.dist.model.Exchange;
 import io.dist.model.ExchangeType;
 import io.dist.model.Queue;
+import io.dist.model.QueueType;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -95,7 +96,8 @@ public class QueueService {
     // ======================== Queue Operations ========================
 
     /**
-     * Creates a new queue by replicating the command through Raft.
+     * Creates a new STANDARD queue by replicating the command through Raft.
+     * Convenience overload that defaults to {@link QueueType#STANDARD}.
      *
      * @param name       unique queue name
      * @param group      logical group for the queue
@@ -104,7 +106,22 @@ public class QueueService {
      * @return a Uni that completes when replication succeeds
      */
     public Uni<Void> createQueue(String name, String group, boolean durable, boolean autoDelete) {
-        return raftService.replicateCreateQueue(name, group, durable, autoDelete)
+        return createQueue(name, group, durable, autoDelete, QueueType.STANDARD);
+    }
+
+    /**
+     * Creates a new queue by replicating the command through Raft.
+     *
+     * @param name       unique queue name
+     * @param group      logical group for the queue
+     * @param durable    whether the queue survives broker restarts
+     * @param autoDelete whether the queue auto-deletes when unused
+     * @param queueType  the queue type (STANDARD or STREAM); defaults to STANDARD if null
+     * @return a Uni that completes when replication succeeds
+     */
+    public Uni<Void> createQueue(String name, String group, boolean durable, boolean autoDelete, QueueType queueType) {
+        QueueType type = queueType != null ? queueType : QueueType.STANDARD;
+        return raftService.replicateCreateQueue(name, group, durable, autoDelete, type)
                 .flatMap(success -> {
                     if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate queue creation"));
                     return Uni.createFrom().voidItem();
@@ -119,11 +136,13 @@ public class QueueService {
      * @param group      logical group
      * @param durable    durability flag
      * @param autoDelete auto-delete flag
+     * @param queueType  queue type (STANDARD or STREAM)
      */
     @Transactional
-    public void createQueueLocal(String name, String group, boolean durable, boolean autoDelete) {
+    public void createQueueLocal(String name, String group, boolean durable, boolean autoDelete, QueueType queueType) {
         if (Queue.findById(name) == null) {
-            new Queue(name, group, durable, autoDelete).persist();
+            QueueType type = queueType != null ? queueType : QueueType.STANDARD;
+            new Queue(name, group, durable, autoDelete, type).persist();
         }
     }
 

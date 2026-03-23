@@ -1,6 +1,9 @@
 package io.dist.model;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
@@ -41,6 +44,15 @@ public class Queue extends PanacheEntityBase {
     /** Whether this queue is automatically deleted when the last consumer disconnects. */
     public boolean autoDelete;
 
+    /**
+     * The behavioral type of this queue. Defaults to {@link QueueType#STANDARD}.
+     * A {@link QueueType#STREAM} queue acts as an append-only log where each
+     * consumer maintains its own independent read offset.
+     */
+    @Column(name = "queue_type")
+    @Enumerated(EnumType.STRING)
+    public QueueType queueType = QueueType.STANDARD;
+
     /** Default no-arg constructor required by JPA / Hibernate. */
     public Queue() {}
 
@@ -57,5 +69,14 @@ public class Queue extends PanacheEntityBase {
         this.queueGroup = queueGroup;
         this.durable = durable;
         this.autoDelete = autoDelete;
+        this.queueType = QueueType.STANDARD;
+    }
+
+    public Queue(String name, String queueGroup, boolean durable, boolean autoDelete, QueueType queueType) {
+        this.name = name;
+        this.queueGroup = queueGroup;
+        this.durable = durable;
+        this.autoDelete = autoDelete;
+        this.queueType = queueType != null ? queueType : QueueType.STANDARD;
     }
 }

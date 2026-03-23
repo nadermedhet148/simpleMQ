@@ -69,6 +69,13 @@ public class Message extends PanacheEntityBase {
     public MessageStatus status;
 
     /**
+     * Position of this message within a STREAM queue's append-only log.
+     * {@code null} for messages in STANDARD queues.
+     */
+    @Column(name = "stream_offset")
+    public Long streamOffset;
+
+    /**
      * Optional key-value headers attached to the message.
      * Stored in a separate {@code message_headers} collection table.
      */

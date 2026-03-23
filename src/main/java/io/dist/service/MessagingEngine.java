@@ -6,12 +6,14 @@ import io.dist.routing.ExchangeRoutingEngine;
 import io.dist.storage.InMemoryBuffer;
 import io.dist.storage.PersistenceManager;
 import io.dist.storage.StorageService;
+import io.dist.storage.StreamBuffer;
 import io.quarkus.scheduler.Scheduled;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -73,6 +75,14 @@ public class MessagingEngine {
      */
     @ConfigProperty(name = "simplemq.visibility.timeout-ms", defaultValue = "30000")
     long visibilityTimeoutMs;
+
+    /**
+     * TTL for messages in STREAM queues. Messages older than this are evicted
+     * from the in-memory StreamBuffer by the periodic eviction scheduler.
+     * Configurable via {@code simplemq.stream.ttl-ms} (default 24 hours).
+     */
+    @ConfigProperty(name = "simplemq.stream.ttl-ms", defaultValue = "86400000")
+    long streamTtlMs;
 
     // ======================== Publish ========================
 
@@ -328,6 +338,28 @@ public class MessagingEngine {
                 LOG.infof("Message %s in queue %s exceeded visibility timeout, requeuing", msg.id, queueName);
                 redeliverExpiredMessage(msg, queueName);
             }
+        }
+    }
+
+    // ======================== Stream TTL Eviction ========================
+
+    /**
+     * Scheduled background task that evicts expired messages from all STREAM queue
+     * buffers. Runs every 60 seconds on the leader node only.
+     *
+     * <p>Messages whose {@code timestamp} is older than {@link #streamTtlMs} are
+     * removed from the front of each {@link StreamBuffer}. Consumer offsets that
+     * fall below the new base offset will simply receive {@code null} from
+     * {@link StreamBuffer#peekAt} and should be treated as "no message available".</p>
+     */
+    @Scheduled(every = "60s", identity = "stream-ttl-eviction")
+    public void evictExpiredStreamMessages() {
+        if (!raftService.isLeader()) {
+            return;
+        }
+        Instant cutoff = Instant.now().minusMillis(streamTtlMs);
+        for (Map.Entry<String, StreamBuffer> entry : storageService.getAllStreamBuffers().entrySet()) {
+            entry.getValue().evictExpiredBefore(cutoff);
         }
     }
 

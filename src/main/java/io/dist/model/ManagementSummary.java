@@ -53,6 +53,9 @@ public class ManagementSummary {
         /** Whether the queue is durable (persisted to disk). */
         public boolean durable;
 
+        /** The behavioral type of this queue (STANDARD or STREAM). */
+        public String queueType;
+
         /**
          * Creates a new QueueInfo snapshot.
          *
@@ -60,12 +63,14 @@ public class ManagementSummary {
          * @param group        logical group
          * @param messageCount current in-memory message count
          * @param durable      durability flag
+         * @param queueType    queue type name
          */
-        public QueueInfo(String name, String group, int messageCount, boolean durable) {
+        public QueueInfo(String name, String group, int messageCount, boolean durable, String queueType) {
             this.name = name;
             this.group = group;
             this.messageCount = messageCount;
             this.durable = durable;
+            this.queueType = queueType;
         }
     }
 }

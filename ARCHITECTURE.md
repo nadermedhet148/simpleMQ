@@ -19,8 +19,10 @@ This document provides a detailed, low-level explanation of how simpleMQ works i
 9. [Visibility Timeout Mechanism](#9-visibility-timeout-mechanism)
 10. [Dead Letter Queue (DLQ)](#10-dead-letter-queue-dlq)
 11. [Metrics & Monitoring](#11-metrics--monitoring)
-12. [Deployment Architecture](#12-deployment-architecture)
-13. [Configuration Reference](#13-configuration-reference)
+12. [Stream Queues](#12-stream-queues)
+13. [Stream Processors](#13-stream-processors)
+14. [Deployment Architecture](#14-deployment-architecture)
+15. [Configuration Reference](#15-configuration-reference)
 
 ---
 
@@ -86,6 +88,7 @@ All persistent entities extend Quarkus Panache's `PanacheEntityBase` and are sto
 |--------------|---------------|----------------------------------------------------|
 | `name`       | `String` (PK) | Unique queue identifier                            |
 | `queueGroup` | `String`      | Logical group for management/filtering             |
+| `queueType`  | `QueueType`   | `STANDARD` (FIFO) or `STREAM` (append-only log)   |
 | `durable`    | `boolean`     | Whether the queue survives broker restarts          |
 | `autoDelete` | `boolean`     | Whether the queue auto-deletes when unused          |
 
@@ -129,7 +132,46 @@ PENDING ──(poll)──▶ DELIVERED ──(ack)──▶ ACKED
 - **NACKED**: Explicitly rejected by consumer (transient, then requeued or DLQ).
 - **DLQ**: Moved to Dead Letter Queue after max delivery attempts — terminal state.
 
-### 2.6 RaftMetadata (`raft_metadata` table)
+### 2.6 StreamConsumerOffset (`stream_consumer_offsets` table)
+
+| Field        | Type          | Description                                              |
+|--------------|---------------|----------------------------------------------------------|
+| `id`         | `String` (PK) | Composite key: `consumerId + ":" + queueName`           |
+| `consumerId` | `String`      | The consumer's unique identifier                         |
+| `queueName`  | `String`      | The STREAM queue name                                    |
+| `nextOffset` | `long`        | Index of the next message this consumer should receive   |
+
+Offsets are replicated through Raft via `UPDATE_STREAM_OFFSET` commands.
+
+### 2.7 StreamProcessor (`stream_processors` table)
+
+| Field                | Type              | Description                                              |
+|----------------------|-------------------|----------------------------------------------------------|
+| `id`                 | `String` (PK)     | UUID generated at creation                               |
+| `name`               | `String` (unique) | Human-readable processor name                            |
+| `sourceQueue`        | `String`          | Name of the source STREAM queue                          |
+| `filterExpression`   | `String`          | Filter expression (null = pass-all)                      |
+| `targetExchange`     | `String`          | Target exchange for forwarded messages                   |
+| `targetRoutingKey`   | `String`          | Optional routing key for the target exchange             |
+| `status`             | `ProcessorStatus` | `RUNNING` or `PAUSED`                                    |
+| `aggregationType`    | `AggregationType` | `COUNT`, `SUM`, or `LAST` (optional)                     |
+| `aggregationField`   | `String`          | JSON path for SUM/LAST value extraction                  |
+| `aggregationGroupBy` | `String`          | JSON path for grouping (null = single "global" group)    |
+| `createdAt`          | `LocalDateTime`   | When the processor was created                           |
+
+### 2.8 StreamProcessorState (`stream_processor_states` table)
+
+| Field         | Type            | Description                                              |
+|---------------|-----------------|----------------------------------------------------------|
+| `id`          | `String` (PK)   | Composite key: `processorId + ":" + stateKey`            |
+| `processorId` | `String`        | The processor this state belongs to                      |
+| `stateKey`    | `String`        | The group-by value, or `"global"`                        |
+| `stateValue`  | `String`        | JSON aggregation state: `{"count":0,"sum":0.0,"last":null}` |
+| `updatedAt`   | `LocalDateTime` | Last update timestamp                                    |
+
+State updates are replicated through Raft via `UPDATE_PROCESSOR_STATE` commands.
+
+### 2.9 RaftMetadata (`raft_metadata` table)
 
 | Field              | Type          | Description                                  |
 |--------------------|---------------|----------------------------------------------|
@@ -204,7 +246,9 @@ Every message exists in two places simultaneously:
 
 ### 4.2 StorageService
 
-`StorageService` is a CDI `@ApplicationScoped` bean that holds a `ConcurrentHashMap<String, InMemoryBuffer>` — one buffer per queue name. Buffers are created lazily via `computeIfAbsent()`.
+`StorageService` is a CDI `@ApplicationScoped` bean that holds two maps:
+- `ConcurrentHashMap<String, InMemoryBuffer>` — one buffer per STANDARD queue name. Buffers are created lazily via `computeIfAbsent()`.
+- `ConcurrentHashMap<String, StreamBuffer>` — one buffer per STREAM queue name. Stream buffers are append-only logs with offset-based access.
 
 ### 4.3 InMemoryBuffer Internals
 
@@ -230,6 +274,26 @@ Map<String, InFlightEntry> inFlight = new ConcurrentHashMap<>();
 - **Startup Recovery:** On application start (via `@Observes StartupEvent`), queries SQLite for all messages where `status != ACKED && status != DLQ`. Messages in `DELIVERED` state are reset to `PENDING` (original consumer is gone). All recovered messages are re-enqueued into their respective in-memory buffers.
 - **Ephemeral Mode:** When `simplemq.persistence.enabled=false`, recovery is skipped. Messages are in-memory only.
 - **Idempotent Save:** `saveMessage()` checks `Message.findById()` before persisting to avoid duplicate key errors.
+- **Stream Recovery:** On startup, STREAM queue messages are recovered into `StreamBuffer` instances (via `recoverEnqueue()`) preserving their original stream offsets.
+
+### 4.5 StreamBuffer Internals
+
+```java
+// Append-only message log (index 0 corresponds to baseOffset)
+CopyOnWriteArrayList<Message> messages;
+
+// Absolute stream offset for the next enqueued message
+AtomicLong nextStreamOffset;
+
+// Absolute offset of the first element in the list (advances on eviction)
+volatile long baseOffset;
+```
+
+**Key operations:**
+- `enqueue(msg)`: Appends to the tail and assigns a monotonically increasing stream offset.
+- `peekAt(offset)`: Returns the message at the given absolute offset without removing it. Maps absolute offset to list index via `offset - baseOffset`.
+- `recoverEnqueue(msg)`: Re-enqueues a message during startup recovery, preserving its original stream offset.
+- `evictExpiredBefore(cutoff)`: Removes messages from the front of the log whose timestamp is before the cutoff, advancing `baseOffset`.
 
 ---
 
@@ -328,6 +392,50 @@ All endpoints are reactive (return `Uni<Response>`) and use Jakarta REST (JAX-RS
 | GET    | `/api/cluster/peers`  | List all cluster peers        | 200 + JSON array            |
 | POST   | `/api/cluster/join`   | Add a node to the cluster     | 200 OK / 400 failure        |
 | POST   | `/api/cluster/leave`  | Remove a node from cluster    | 200 OK / 400 failure        |
+
+### 6.5 StreamResource (`/api/stream`)
+
+| Method | Path                  | Description                                  | Response                    |
+|--------|-----------------------|----------------------------------------------|-----------------------------||
+| GET    | `/api/stream/{queue}` | Poll next unread message for a consumer      | 200 + message / 204 empty   |
+
+**Query parameter:** `consumerId` (required) — the consumer's unique identifier.
+
+**Response headers:** `X-Stream-Offset` — the absolute offset of the returned message.
+
+**Behavior:**
+1. Validates the queue exists and is of type `STREAM`.
+2. Loads (or creates) the `StreamConsumerOffset` for `(consumerId, queueName)`.
+3. Peeks at the message at the consumer's current offset in the `StreamBuffer`.
+4. If found, advances the offset by 1 (replicated through Raft) and returns the message.
+5. If the consumer is at the end of the stream, returns `204 No Content`.
+
+### 6.6 ProcessorResource (`/api/processors`)
+
+| Method | Path                          | Description                | Response          |
+|--------|-------------------------------|----------------------------|-------------------|
+| POST   | `/api/processors`             | Create a processor         | 201 Created       |
+| GET    | `/api/processors`             | List all processors        | 200 + JSON array  |
+| GET    | `/api/processors/{id}`        | Get a single processor     | 200 + JSON / 404  |
+| DELETE | `/api/processors/{id}`        | Delete a processor         | 204 No Content    |
+| POST   | `/api/processors/{id}/pause`  | Pause a processor          | 204 No Content    |
+| POST   | `/api/processors/{id}/resume` | Resume a processor         | 204 No Content    |
+| GET    | `/api/processors/{id}/state`  | Get aggregation state      | 200 + JSON array  |
+
+**Create request body:**
+```json
+{
+  "name": "order-filter",
+  "sourceQueue": "events-stream",
+  "targetExchange": "filtered-orders",
+  "targetRoutingKey": "orders",
+  "filterExpression": "payload.type == \"order\"",
+  "aggregationType": "COUNT",
+  "aggregationGroupBy": "type"
+}
+```
+
+All create/pause/resume/delete operations are replicated through Raft.
 
 ---
 
@@ -499,7 +607,119 @@ The `/api/management/summary` endpoint returns a comprehensive snapshot:
 
 ---
 
-## 12. Deployment Architecture
+## 12. Stream Queues
+
+### 12.1 Overview
+
+STREAM queues are append-only logs where messages are never removed on read. Unlike STANDARD queues (competing consumers, destructive reads), STREAM queues allow multiple independent consumers to each maintain their own read offset.
+
+### 12.2 Key Differences from STANDARD Queues
+
+| Aspect              | STANDARD Queue                    | STREAM Queue                          |
+|---------------------|-----------------------------------|---------------------------------------|
+| Read behavior       | Destructive (dequeue)             | Non-destructive (peek by offset)      |
+| Consumer model      | Competing consumers               | Independent consumers with offsets    |
+| ACK/NACK            | Required                          | Not needed (at-most-once delivery)    |
+| Message retention   | Removed on ACK                    | Retained until TTL eviction           |
+| In-memory buffer    | `InMemoryBuffer` (FIFO)           | `StreamBuffer` (append-only log)      |
+| Visibility timeout  | Applies                           | Does not apply                        |
+
+### 12.3 Stream Consume Flow
+
+```
+Consumer ──GET /api/stream/{queue}?consumerId=C1──▶ StreamResource
+    │
+    ├── Validate queue exists and is STREAM type
+    ├── Load StreamConsumerOffset for (C1, queue)
+    ├── StreamBuffer.peekAt(currentOffset)
+    │       │
+    │       ├── Message found → advance offset via Raft, return message
+    │       └── No message   → return 204 No Content
+    │
+    └── Raft replicates UPDATE_STREAM_OFFSET(C1, queue, newOffset)
+```
+
+### 12.4 TTL Eviction
+
+The leader periodically calls `StreamBuffer.evictExpiredBefore(cutoff)` to remove messages older than the configured TTL from the front of the log. The `baseOffset` advances accordingly so that consumer offsets remain valid.
+
+---
+
+## 13. Stream Processors
+
+### 13.1 Overview
+
+Stream processors are server-side pipelines that continuously read from a source STREAM queue, evaluate a filter expression on each message, and forward matching messages to a target exchange. They optionally maintain stateful aggregations (COUNT, SUM, LAST) that are persisted and replicated through Raft.
+
+### 13.2 Execution Model
+
+The `ProcessorExecutionEngine` runs on a scheduled timer (leader only). For each `RUNNING` processor:
+
+1. Read the processor's current offset from `StreamConsumerOffset` (consumer ID = `"processor:" + processorId`).
+2. Peek at the next message in the source `StreamBuffer`.
+3. Evaluate the `filterExpression` via `FilterEvaluator`.
+4. If the message passes the filter:
+   - Publish it to the `targetExchange` with the configured `targetRoutingKey` via `MessagingEngine.publish()`.
+   - If aggregation is configured, compute the new state and replicate via `UPDATE_PROCESSOR_STATE`.
+5. Advance the processor's offset via `UPDATE_STREAM_OFFSET`.
+6. Repeat until the processor catches up to the end of the stream.
+
+### 13.3 Filter Expression Engine
+
+Expressions follow the format: `<path> <op> <value>`
+
+- **Paths:** `routingKey`, `exchange`, `queueName`, or dot-separated JSON paths rooted at `payload` (e.g., `payload.type`, `payload.order.amount`).
+- **Operators:** `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`.
+- **Values:** double-quoted strings, numbers, or `true`/`false`.
+- A `null` or blank expression is treated as pass-all.
+
+### 13.4 Aggregation
+
+When `aggregationType` is set, the processor maintains per-group state in `StreamProcessorState`:
+
+| Type    | Behavior                                                        |
+|---------|-----------------------------------------------------------------|
+| `COUNT` | Increments a counter for each matching message                  |
+| `SUM`   | Adds the numeric value at `aggregationField` to a running total |
+| `LAST`  | Stores the latest value at `aggregationField`                   |
+
+Grouping is determined by `aggregationGroupBy` (a JSON path). If not set, all state is stored under a single `"global"` key. State JSON format: `{"count":0,"sum":0.0,"last":null}`.
+
+### 13.5 Raft Commands for Streams & Processors
+
+| Command                  | Format                                                          |
+|--------------------------|-----------------------------------------------------------------|
+| UPDATE_STREAM_OFFSET     | `UPDATE_STREAM_OFFSET\|consumerId\|queueName\|newOffset`        |
+| CREATE_PROCESSOR         | `CREATE_PROCESSOR\|<JSON-serialized StreamProcessor>`           |
+| PAUSE_PROCESSOR          | `PAUSE_PROCESSOR\|processorId`                                  |
+| RESUME_PROCESSOR         | `RESUME_PROCESSOR\|processorId`                                 |
+| DELETE_PROCESSOR         | `DELETE_PROCESSOR\|processorId`                                 |
+| UPDATE_PROCESSOR_STATE   | `UPDATE_PROCESSOR_STATE\|processorId\|stateKey\|stateValue`     |
+
+### 13.6 Processor Lifecycle
+
+```
+                    ┌──────────┐
+  POST /processors  │ RUNNING  │◀── POST /{id}/resume
+  ─────────────────▶│          │
+                    └────┬─────┘
+                         │
+              POST /{id}/pause
+                         │
+                    ┌────▼─────┐
+                    │  PAUSED  │
+                    └────┬─────┘
+                         │
+              DELETE /{id}
+                         │
+                    ┌────▼─────┐
+                    │ DELETED  │
+                    └──────────┘
+```
+
+---
+
+## 14. Deployment Architecture
 
 ### Docker Compose (3-Node Cluster)
 
@@ -533,7 +753,7 @@ The `/api/management/summary` endpoint returns a comprehensive snapshot:
 
 ---
 
-## 13. Configuration Reference
+## 15. Configuration Reference
 
 All properties are set in `application.properties` and can be overridden via environment variables.
 

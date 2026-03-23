@@ -123,7 +123,9 @@ public class LeaderProxyFilter {
      * @return {@code true} if the request should be proxied to the leader
      */
     private boolean isWriteOperation(String method, String path) {
-        if (path.startsWith("api/management") || path.startsWith("api/publish") || path.startsWith("api/poll") || path.startsWith("api/cluster")) {
+        if (path.startsWith("api/management") || path.startsWith("api/publish")
+                || path.startsWith("api/poll") || path.startsWith("api/cluster")
+                || path.startsWith("api/processors")) {
             // All poll requests are writes (dequeue); for other paths only non-GET are writes
             return !method.equalsIgnoreCase("GET") || path.startsWith("api/poll");
         }

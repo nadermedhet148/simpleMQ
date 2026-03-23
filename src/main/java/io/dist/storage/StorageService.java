@@ -1,6 +1,7 @@
 package io.dist.storage;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -20,8 +21,11 @@ import java.util.concurrent.ConcurrentHashMap;
 @ApplicationScoped
 public class StorageService {
 
-    /** Map of queue name → in-memory buffer. Created lazily on first access. */
+    /** Map of queue name → in-memory buffer for STANDARD queues. Created lazily on first access. */
     private final Map<String, InMemoryBuffer> buffers = new ConcurrentHashMap<>();
+
+    /** Map of queue name → stream buffer for STREAM queues. Created lazily on first access. */
+    private final Map<String, StreamBuffer> streamBuffers = new ConcurrentHashMap<>();
 
     /**
      * Returns the in-memory buffer for the given queue, creating one if it
@@ -55,9 +59,40 @@ public class StorageService {
     }
 
     /**
+     * Returns the stream buffer for the given STREAM queue, creating one if it
+     * does not already exist.
+     *
+     * @param queueName the stream queue name
+     * @return the stream buffer associated with the queue
+     */
+    public StreamBuffer getStreamBuffer(String queueName) {
+        return streamBuffers.computeIfAbsent(queueName, k -> new StreamBuffer());
+    }
+
+    /**
+     * Returns a read-only view of all stream buffers.
+     * Used by the TTL eviction scheduler to iterate over every stream queue.
+     *
+     * @return unmodifiable map of queue name → stream buffer
+     */
+    public Map<String, StreamBuffer> getAllStreamBuffers() {
+        return Collections.unmodifiableMap(streamBuffers);
+    }
+
+    /**
+     * Removes and discards the stream buffer for the given queue.
+     *
+     * @param queueName the queue name whose stream buffer should be deleted
+     */
+    public void deleteStreamBuffer(String queueName) {
+        streamBuffers.remove(queueName);
+    }
+
+    /**
      * Removes all buffers. Typically used in tests to reset state between runs.
      */
     public void clear() {
         buffers.clear();
+        streamBuffers.clear();
     }
 }

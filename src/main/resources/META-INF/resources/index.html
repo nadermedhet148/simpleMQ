@@ -113,6 +113,8 @@
         .type-badge { border-radius: 6px; padding: .2rem .55rem; font-size: .75rem; font-weight: 600; }
         .type-direct { background: #1c2a3e; color: #58a6ff; }
         .type-fanout { background: #1a3626; color: #3fb950; }
+        .type-stream { background: #2d1b3e; color: #a371f7; }
+        .type-standard { background: #21262d; color: #8b949e; }
         .count-badge { background: #21262d; color: #e6edf3; border-radius: 6px; padding: .15rem .5rem; font-size: .82rem; font-weight: 600; }
 
         /* ── Section title ───────────────────────────────────── */
@@ -223,6 +225,13 @@
         </a>
         <a class="sidebar-link" href="#" data-page="consume">
             <i class="bi bi-inbox"></i> Consume
+        </a>
+        <a class="sidebar-link" href="#" data-page="stream">
+            <i class="bi bi-collection-play"></i> Stream
+        </a>
+        <a class="sidebar-link" href="#" data-page="processors">
+            <i class="bi bi-cpu"></i> Processors
+            <span class="count-badge ms-auto" id="sb-p-count">0</span>
         </a>
 
         <div class="nav-section">Infrastructure</div>
@@ -351,7 +360,7 @@
         </div>
         <div class="smq-table">
             <table class="table table-borderless mb-0">
-                <thead><tr><th>Name</th><th>Group</th><th>Messages</th><th>Durable</th><th>Auto-delete</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Type</th><th>Group</th><th>Messages</th><th>Durable</th><th>Auto-delete</th><th></th></tr></thead>
                 <tbody id="queues-table">
                     <tr><td colspan="6"><div class="empty-state"><i class="bi bi-collection"></i>No queues yet</div></td></tr>
                 </tbody>
@@ -459,6 +468,87 @@
         </div>
     </div>
 
+    <!-- ======== STREAM ======== -->
+    <div class="page" id="page-stream">
+        <div class="section-title">Stream Consume</div>
+        <div class="row g-3">
+            <div class="col-md-5">
+                <div class="smq-panel">
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Queue (STREAM type)</label>
+                        <input type="text" class="form-control" id="stream-queue" placeholder="my-stream-queue">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Consumer ID</label>
+                        <input type="text" class="form-control" id="stream-consumer-id" placeholder="e.g. consumer-A">
+                    </div>
+                    <button class="btn btn-smq-primary w-100" onclick="pollStream()">
+                        <i class="bi bi-play-circle me-2"></i>Poll Next Message
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-7">
+                <div class="smq-panel">
+                    <div style="font-size:.82rem;color:#8b949e;margin-bottom:.75rem;">Stream Message</div>
+                    <div id="stream-msg-area">
+                        <div class="empty-state"><i class="bi bi-collection-play"></i>No message polled yet</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== PROCESSORS ======== -->
+    <div class="page" id="page-processors">
+        <div class="section-title">Stream Processors</div>
+        <div class="smq-table">
+            <div class="smq-table-header">
+                <h6><i class="bi bi-cpu me-2"></i>Processors</h6>
+                <button class="btn btn-smq-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createProcessorModal">
+                    <i class="bi bi-plus-lg me-1"></i>New Processor
+                </button>
+            </div>
+            <table class="table table-borderless mb-0">
+                <thead><tr>
+                    <th>Name</th>
+                    <th>Source Queue</th>
+                    <th>Filter</th>
+                    <th>Target Exchange</th>
+                    <th>Aggregation</th>
+                    <th>Status</th>
+                    <th class="text-end">Actions</th>
+                </tr></thead>
+                <tbody id="processors-table">
+                    <tr><td colspan="7"><div class="empty-state"><i class="bi bi-cpu"></i>No processors yet</div></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Processor state panel (shown when a processor is clicked) -->
+        <div id="processor-state-panel" style="display:none;margin-top:1.5rem;">
+            <div class="smq-table">
+                <div class="smq-table-header">
+                    <h6><i class="bi bi-bar-chart me-2"></i>Aggregation State — <span id="processor-state-name" style="color:#a371f7;"></span></h6>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="hideProcessorState()">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+                <table class="table table-borderless mb-0">
+                    <thead><tr>
+                        <th>Group Key</th>
+                        <th>Count</th>
+                        <th>Sum</th>
+                        <th>Last</th>
+                        <th>Updated</th>
+                    </tr></thead>
+                    <tbody id="processor-state-table">
+                        <tr><td colspan="5"><div class="empty-state"><i class="bi bi-bar-chart"></i>No state</div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- ======== CLUSTER ======== -->
     <div class="page" id="page-cluster">
         <div class="section-title">Cluster</div>
@@ -504,6 +594,69 @@
 
 </main>
 
+<!-- Create Processor -->
+<div class="modal fade" id="createProcessorModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title"><i class="bi bi-cpu me-2" style="color:#a371f7"></i>Create Stream Processor</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="proc-name" placeholder="e.g. order-filter">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Source Queue (STREAM) <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="proc-source-queue" placeholder="e.g. raw-events">
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Filter Expression <span style="color:#8b949e;">(optional — blank = pass all)</span></label>
+                        <input type="text" class="form-control" id="proc-filter" placeholder='e.g. payload.type == "order"'>
+                        <div style="font-size:.75rem;color:#8b949e;margin-top:.3rem;">
+                            Paths: <code>routingKey</code>, <code>exchange</code>, <code>queueName</code>, <code>payload.field</code> &nbsp;·&nbsp;
+                            Ops: <code>==</code> <code>!=</code> <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code> <code>contains</code>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Target Exchange <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="proc-target-exchange" placeholder="e.g. processed">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Target Routing Key <span style="color:#8b949e;">(optional)</span></label>
+                        <input type="text" class="form-control" id="proc-routing-key" placeholder="e.g. orders">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Aggregation Type</label>
+                        <select class="form-select" id="proc-agg-type" onchange="toggleAggFields()">
+                            <option value="">— none —</option>
+                            <option value="COUNT">COUNT</option>
+                            <option value="SUM">SUM</option>
+                            <option value="LAST">LAST</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4" id="proc-agg-field-group" style="display:none;">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Aggregation Field</label>
+                        <input type="text" class="form-control" id="proc-agg-field" placeholder="e.g. payload.amount">
+                    </div>
+                    <div class="col-md-4" id="proc-group-by-group" style="display:none;">
+                        <label class="form-label" style="font-size:.82rem;color:#8b949e;">Group By</label>
+                        <input type="text" class="form-control" id="proc-group-by" placeholder="e.g. payload.region">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-smq-primary btn-sm" onclick="createProcessor()">
+                    <i class="bi bi-plus-lg me-1"></i>Create Processor
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ── Toast container ──────────────────────────────────────── -->
 <div id="toast-container"></div>
 
@@ -525,6 +678,19 @@
                 <div class="mb-3">
                     <label class="form-label" style="font-size:.82rem;color:#8b949e;">Group</label>
                     <input type="text" class="form-control" id="q-group" value="default" placeholder="default">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" style="font-size:.82rem;color:#8b949e;">Queue Type</label>
+                    <div class="d-flex gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="q-type" id="q-type-standard" value="STANDARD" checked>
+                            <label class="form-check-label" style="font-size:.85rem;">Standard</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="q-type" id="q-type-stream" value="STREAM">
+                            <label class="form-check-label" style="font-size:.85rem;">Stream</label>
+                        </div>
+                    </div>
                 </div>
                 <div class="row">
                     <div class="col-6">
@@ -633,7 +799,7 @@ let cachedBindings = [];
 ───────────────────────────────────────────────────────────── */
 const pageTitles = {
     dashboard: 'Dashboard', queues: 'Queues', exchanges: 'Exchanges',
-    bindings: 'Bindings', publish: 'Publish', consume: 'Consume', cluster: 'Cluster'
+    bindings: 'Bindings', publish: 'Publish', consume: 'Consume', stream: 'Stream', cluster: 'Cluster'
 };
 
 document.querySelectorAll('[data-page]').forEach(link => {
@@ -767,6 +933,9 @@ async function refreshData() {
         cachedBindings = await api('/api/management/bindings');
         renderBindings(cachedBindings);
     } catch (_) {}
+
+    // Processors (separate call)
+    refreshProcessors();
 }
 
 function fmt(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n; }
@@ -792,12 +961,15 @@ function renderDashQueues(queues) {
 function renderQueues(queues) {
     const tbody = document.getElementById('queues-table');
     if (!queues.length) {
-        tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i class="bi bi-collection"></i>No queues yet</div></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><i class="bi bi-collection"></i>No queues yet</div></td></tr>';
         return;
     }
-    tbody.innerHTML = queues.map(q => `
-        <tr>
+    tbody.innerHTML = queues.map(q => {
+        const qt = q.queueType || 'STANDARD';
+        const typeCls = qt === 'STREAM' ? 'type-stream' : 'type-standard';
+        return `<tr>
             <td><code style="color:#a371f7;font-size:.88rem;">${esc(q.name)}</code></td>
+            <td><span class="type-badge ${typeCls}">${esc(qt)}</span></td>
             <td style="color:#8b949e;">${esc(q.group || q.queueGroup || '')}</td>
             <td><span class="count-badge">${q.messageCount}</span></td>
             <td>${q.durable ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-dash-circle text-secondary"></i>'}</td>
@@ -807,7 +979,8 @@ function renderQueues(queues) {
                     <i class="bi bi-trash"></i>
                 </button>
             </td>
-        </tr>`).join('');
+        </tr>`;
+    }).join('');
 }
 
 function renderExchanges(exchanges) {
@@ -899,12 +1072,14 @@ async function createQueue() {
     const group = document.getElementById('q-group').value.trim() || 'default';
     const durable = document.getElementById('q-durable').checked;
     const autoDelete = document.getElementById('q-autodelete').checked;
+    const queueType = document.querySelector('input[name="q-type"]:checked').value;
     if (!name) { toast('Queue name is required', 'error'); return; }
     try {
-        await api('/api/management/queues', 'POST', { name, queueGroup: group, durable, autoDelete });
+        await api('/api/management/queues', 'POST', { name, queueGroup: group, durable, autoDelete, queueType });
         bootstrap.Modal.getInstance(document.getElementById('createQueueModal')).hide();
         document.getElementById('q-name').value = '';
-        toast(`Queue "${name}" created`, 'success');
+        document.getElementById('q-type-standard').checked = true;
+        toast(`Queue "${name}" created (${queueType})`, 'success');
         refreshData();
     } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
@@ -1065,6 +1240,178 @@ async function nackMessage(requeue) {
             '<div class="empty-state"><i class="bi bi-inbox"></i>Ready to poll</div>';
         refreshData();
     } catch (e) { toast('Nack failed: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Stream Consume
+───────────────────────────────────────────────────────────── */
+async function pollStream() {
+    const queue = document.getElementById('stream-queue').value.trim();
+    const consumerId = document.getElementById('stream-consumer-id').value.trim();
+    if (!queue) { toast('Queue name is required', 'error'); return; }
+    if (!consumerId) { toast('Consumer ID is required', 'error'); return; }
+    try {
+        const res = await fetch(`/api/stream/${encodeURIComponent(queue)}?consumerId=${encodeURIComponent(consumerId)}`);
+        const area = document.getElementById('stream-msg-area');
+        if (res.status === 204) {
+            toast('No new messages in stream', 'info');
+            area.innerHTML = '<div class="empty-state"><i class="bi bi-collection-play"></i>No new messages (end of stream)</div>';
+            return;
+        }
+        if (!res.ok) throw new Error(await res.text());
+        const streamOffset = res.headers.get('X-Stream-Offset');
+        const msg = await res.json();
+        area.innerHTML = `
+            <div class="mb-2" style="display:flex;justify-content:space-between;align-items:center;">
+                <code style="color:#a371f7;font-size:.8rem;">${esc(msg.id || '—')}</code>
+                <span style="font-size:.75rem;color:#8b949e;">offset: <b style="color:#e6edf3;">${esc(streamOffset)}</b></span>
+            </div>
+            <div class="mb-1" style="font-size:.78rem;color:#8b949e;">routing key: ${esc(msg.routingKey || '(none)')}</div>
+            <div class="msg-bubble">${esc(msg.payload || JSON.stringify(msg))}</div>`;
+        toast(`Stream message at offset ${streamOffset}`, 'success');
+        logActivity(`Stream consumer '${consumerId}' polled offset ${streamOffset} from '${queue}'`, 'info');
+    } catch (e) { toast('Stream poll failed: ' + e.message, 'error'); }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Stream Processors
+───────────────────────────────────────────────────────────── */
+function toggleAggFields() {
+    const type = document.getElementById('proc-agg-type').value;
+    const needsField = type === 'SUM' || type === 'LAST';
+    document.getElementById('proc-agg-field-group').style.display = needsField ? '' : 'none';
+    document.getElementById('proc-group-by-group').style.display = type ? '' : 'none';
+}
+
+async function refreshProcessors() {
+    try {
+        const processors = await api('/api/processors');
+        document.getElementById('sb-p-count').textContent = processors.length;
+        renderProcessors(processors);
+    } catch (_) {}
+}
+
+function renderProcessors(processors) {
+    const tbody = document.getElementById('processors-table');
+    if (!processors.length) {
+        tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><i class="bi bi-cpu"></i>No processors yet</div></td></tr>';
+        return;
+    }
+    tbody.innerHTML = processors.map(p => {
+        const statusColor = p.status === 'RUNNING' ? '#3fb950' : p.status === 'PAUSED' ? '#d29922' : '#8b949e';
+        const statusIcon = p.status === 'RUNNING' ? 'bi-play-circle-fill' : p.status === 'PAUSED' ? 'bi-pause-circle-fill' : 'bi-stop-circle-fill';
+        const aggBadge = p.aggregationType
+            ? `<span class="type-badge" style="background:#1c2128;color:#a371f7;">${esc(p.aggregationType)}</span>`
+            : '<span style="color:#8b949e;font-size:.78rem;">—</span>';
+        return `<tr>
+            <td><a href="#" onclick="showProcessorState('${esc(p.id)}','${esc(p.name)}');return false;"
+                   style="color:#a371f7;text-decoration:none;font-weight:600;">${esc(p.name)}</a></td>
+            <td><code style="color:#58a6ff;font-size:.85rem;">${esc(p.sourceQueue)}</code></td>
+            <td><span style="color:#8b949e;font-size:.82rem;font-family:monospace;">${esc(p.filterExpression || '(pass all)')}</span></td>
+            <td><code style="color:#e6edf3;font-size:.85rem;">${esc(p.targetExchange)}</code>${p.targetRoutingKey ? ` <span style="color:#8b949e;font-size:.78rem;">→ ${esc(p.targetRoutingKey)}</span>` : ''}</td>
+            <td>${aggBadge}</td>
+            <td><i class="bi ${statusIcon}" style="color:${statusColor};"></i> <span style="color:${statusColor};font-size:.85rem;">${esc(p.status)}</span></td>
+            <td class="text-end" style="white-space:nowrap;">
+                ${p.status === 'RUNNING'
+                    ? `<button class="btn btn-sm btn-outline-warning me-1" onclick="pauseProcessor('${esc(p.id)}')" title="Pause"><i class="bi bi-pause"></i></button>`
+                    : `<button class="btn btn-sm btn-outline-success me-1" onclick="resumeProcessor('${esc(p.id)}')" title="Resume"><i class="bi bi-play"></i></button>`}
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteProcessor('${esc(p.id)}','${esc(p.name)}')" title="Delete"><i class="bi bi-trash"></i></button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+async function createProcessor() {
+    const name = document.getElementById('proc-name').value.trim();
+    const sourceQueue = document.getElementById('proc-source-queue').value.trim();
+    const filterExpression = document.getElementById('proc-filter').value.trim() || null;
+    const targetExchange = document.getElementById('proc-target-exchange').value.trim();
+    const targetRoutingKey = document.getElementById('proc-routing-key').value.trim() || null;
+    const aggType = document.getElementById('proc-agg-type').value || null;
+    const aggField = document.getElementById('proc-agg-field').value.trim() || null;
+    const aggGroupBy = document.getElementById('proc-group-by').value.trim() || null;
+
+    if (!name) { toast('Name is required', 'error'); return; }
+    if (!sourceQueue) { toast('Source queue is required', 'error'); return; }
+    if (!targetExchange) { toast('Target exchange is required', 'error'); return; }
+
+    try {
+        await api('/api/processors', 'POST', {
+            name, sourceQueue, filterExpression, targetExchange, targetRoutingKey,
+            aggregationType: aggType, aggregationField: aggField, aggregationGroupBy: aggGroupBy
+        });
+        bootstrap.Modal.getInstance(document.getElementById('createProcessorModal')).hide();
+        document.getElementById('proc-name').value = '';
+        document.getElementById('proc-source-queue').value = '';
+        document.getElementById('proc-filter').value = '';
+        document.getElementById('proc-target-exchange').value = '';
+        document.getElementById('proc-routing-key').value = '';
+        document.getElementById('proc-agg-type').value = '';
+        document.getElementById('proc-agg-field').value = '';
+        document.getElementById('proc-group-by').value = '';
+        toggleAggFields();
+        toast(`Processor "${name}" created`, 'success');
+        refreshProcessors();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function pauseProcessor(id) {
+    try {
+        await api(`/api/processors/${encodeURIComponent(id)}/pause`, 'POST');
+        toast('Processor paused', 'info');
+        refreshProcessors();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function resumeProcessor(id) {
+    try {
+        await api(`/api/processors/${encodeURIComponent(id)}/resume`, 'POST');
+        toast('Processor resumed', 'success');
+        refreshProcessors();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteProcessor(id, name) {
+    if (!confirm(`Delete processor "${name}"?`)) return;
+    try {
+        await api(`/api/processors/${encodeURIComponent(id)}`, 'DELETE');
+        toast(`Processor "${name}" deleted`, 'success');
+        hideProcessorState();
+        refreshProcessors();
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function showProcessorState(id, name) {
+    document.getElementById('processor-state-name').textContent = name;
+    document.getElementById('processor-state-panel').style.display = '';
+    try {
+        const states = await api(`/api/processors/${encodeURIComponent(id)}/state`);
+        const tbody = document.getElementById('processor-state-table');
+        if (!states.length) {
+            tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><i class="bi bi-bar-chart"></i>No aggregation state</div></td></tr>';
+            return;
+        }
+        tbody.innerHTML = states.map(s => {
+            let count = '—', sum = '—', last = '—';
+            try {
+                const v = JSON.parse(s.stateValue);
+                count = v.count !== undefined ? v.count : '—';
+                sum = v.sum !== undefined ? Number(v.sum).toFixed(2) : '—';
+                last = v.last !== undefined && v.last !== null ? esc(String(v.last)) : '—';
+            } catch (_) {}
+            return `<tr>
+                <td><code style="color:#a371f7;">${esc(s.stateKey)}</code></td>
+                <td>${count}</td>
+                <td>${sum}</td>
+                <td>${last}</td>
+                <td style="color:#8b949e;font-size:.78rem;">${esc(s.updatedAt || '')}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) { toast('Failed to load state: ' + e.message, 'error'); }
+}
+
+function hideProcessorState() {
+    document.getElementById('processor-state-panel').style.display = 'none';
 }
 
 /* ─────────────────────────────────────────────────────────────

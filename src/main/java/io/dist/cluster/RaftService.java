@@ -567,10 +567,26 @@ public class RaftService {
      * @param group      logical group
      * @param durable    durability flag
      * @param autoDelete auto-delete flag
+     * @param queueType  queue type (STANDARD or STREAM)
      * @return a Uni emitting {@code true} on success
      */
-    public Uni<Boolean> replicateCreateQueue(String name, String group, boolean durable, boolean autoDelete) {
-        return sendCommand(String.format("CREATE_QUEUE|%s|%s|%b|%b", name, group, durable, autoDelete));
+    public Uni<Boolean> replicateCreateQueue(String name, String group, boolean durable, boolean autoDelete, io.dist.model.QueueType queueType) {
+        String type = queueType != null ? queueType.name() : "STANDARD";
+        return sendCommand(String.format("CREATE_QUEUE|%s|%s|%b|%b|%s", name, group, durable, autoDelete, type));
+    }
+
+    /**
+     * Replicates an UPDATE_STREAM_OFFSET command through the Raft log.
+     * Persists the consumer's next read position on all cluster nodes.
+     *
+     * @param consumerId the consumer identifier
+     * @param queueName  the stream queue name
+     * @param offset     the new next-offset value
+     * @return a Uni that completes when replication succeeds
+     */
+    public Uni<Void> replicateUpdateStreamOffset(String consumerId, String queueName, long offset) {
+        String cmd = String.format("UPDATE_STREAM_OFFSET|%s|%s|%d", consumerId, queueName, offset);
+        return sendCommand(cmd).replaceWithVoid();
     }
 
     /**
@@ -609,6 +625,74 @@ public class RaftService {
     public Uni<Boolean> replicateUnbind(String exchangeName, String queueName, String routingKey) {
         String encodedRoutingKey = routingKey == null ? "null" : Base64.getEncoder().encodeToString(routingKey.getBytes(StandardCharsets.UTF_8));
         return sendCommand(String.format("UNBIND|%s|%s|%s", exchangeName, queueName, encodedRoutingKey));
+    }
+
+    /**
+     * Replicates a CREATE_PROCESSOR command through the Raft log.
+     * The filter expression and routing key are Base64-encoded (may contain {@code |}).
+     *
+     * @param p the processor definition to replicate
+     * @return a Uni emitting {@code true} on success
+     */
+    public Uni<Boolean> replicateCreateProcessor(io.dist.model.StreamProcessor p) {
+        String encodedFilter = p.filterExpression == null ? "null"
+                : Base64.getEncoder().encodeToString(p.filterExpression.getBytes(StandardCharsets.UTF_8));
+        String encodedRoutingKey = p.targetRoutingKey == null ? "null"
+                : Base64.getEncoder().encodeToString(p.targetRoutingKey.getBytes(StandardCharsets.UTF_8));
+        String aggType = p.aggregationType == null ? "null" : p.aggregationType.name();
+        String aggField = p.aggregationField == null ? "null"
+                : Base64.getEncoder().encodeToString(p.aggregationField.getBytes(StandardCharsets.UTF_8));
+        String aggGroupBy = p.aggregationGroupBy == null ? "null"
+                : Base64.getEncoder().encodeToString(p.aggregationGroupBy.getBytes(StandardCharsets.UTF_8));
+        return sendCommand(String.format("CREATE_PROCESSOR|%s|%s|%s|%s|%s|%s|%s|%s|%s",
+                p.id, p.name, p.sourceQueue, encodedFilter, p.targetExchange,
+                encodedRoutingKey, aggType, aggField, aggGroupBy));
+    }
+
+    /**
+     * Replicates a PAUSE_PROCESSOR command through the Raft log.
+     *
+     * @param id the processor ID to pause
+     * @return a Uni emitting {@code true} on success
+     */
+    public Uni<Boolean> replicatePauseProcessor(String id) {
+        return sendCommand(String.format("PAUSE_PROCESSOR|%s", id));
+    }
+
+    /**
+     * Replicates a RESUME_PROCESSOR command through the Raft log.
+     *
+     * @param id the processor ID to resume
+     * @return a Uni emitting {@code true} on success
+     */
+    public Uni<Boolean> replicateResumeProcessor(String id) {
+        return sendCommand(String.format("RESUME_PROCESSOR|%s", id));
+    }
+
+    /**
+     * Replicates a DELETE_PROCESSOR command through the Raft log.
+     *
+     * @param id the processor ID to delete
+     * @return a Uni emitting {@code true} on success
+     */
+    public Uni<Boolean> replicateDeleteProcessor(String id) {
+        return sendCommand(String.format("DELETE_PROCESSOR|%s", id));
+    }
+
+    /**
+     * Replicates an UPDATE_PROCESSOR_STATE command through the Raft log.
+     * The state value is Base64-encoded (may contain {@code |}).
+     *
+     * @param processorId the processor identifier
+     * @param stateKey    the aggregation group key or "global"
+     * @param stateValue  the JSON aggregation state
+     * @return a Uni that completes when replication succeeds
+     */
+    public Uni<Void> replicateUpdateProcessorState(String processorId, String stateKey, String stateValue) {
+        String encodedStateValue = Base64.getEncoder()
+                .encodeToString(stateValue.getBytes(StandardCharsets.UTF_8));
+        return sendCommand(String.format("UPDATE_PROCESSOR_STATE|%s|%s|%s",
+                processorId, stateKey, encodedStateValue)).replaceWithVoid();
     }
 
     /**

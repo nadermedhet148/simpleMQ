@@ -11,6 +11,7 @@ The system is built as a set of decoupled components working together to provide
 3.  **Clustering Service (`io.dist.cluster`)**: Implements the Raft consensus algorithm (via Apache Ratis) to ensure data consistency and leader election across a multi-node cluster.
 4.  **Storage Engine (`io.dist.storage`)**: A hybrid model that keeps active messages in memory for speed while persisting them to a SQLite database for durability.
 5.  **Routing Engine (`io.dist.routing`)**: Pluggable strategies for `Direct` (routing-key based) and `Fanout` (broadcast) message distribution.
+6.  **Stream Processing (`io.dist.service`)**: Server-side processor pipelines that consume from STREAM queues, evaluate filter expressions, forward messages, and maintain aggregation state.
 
 ## How It Works
 
@@ -30,11 +31,14 @@ The system is built as a set of decoupled components working together to provide
 ### Functional Requirements
 - **Exchange & Queue Management**: Ability to create and delete exchanges and queues. Queues are assigned to specific groups.
 - **Exchange Types**: Support for `Direct` (routing key based) and `Pub-Sub` (Fanout/Broadcast) exchange logic.
+- **Queue Types**: Support for `STANDARD` (classic FIFO with competing consumers) and `STREAM` (append-only log with independent consumer offsets).
 - **Producer API**: REST endpoint to publish messages to a specific exchange with a routing key.
 - **Consumer API (Pull)**: REST endpoint for consumers to pull messages from assigned queues.
+- **Stream Consumer API**: REST endpoint for consumers to read from STREAM queues with per-consumer offset tracking.
+- **Stream Processors**: Server-side processing pipelines that read from a STREAM queue, apply filter expressions, forward matching messages to a target exchange, and optionally maintain stateful aggregations (COUNT, SUM, LAST).
 - **Acknowledgment System**: Mechanism to mark messages as 'done' (Ack) or 'failed' (Nack).
 - **Dead Letter Queue (DLQ)**: Automated routing of messages to a DLQ after a specific number of failed attempts or a Nack.
-- **Management UI**: A simple web-based dashboard to visualize and manage exchanges, queues, and message flow.
+- **Management UI**: A simple web-based dashboard to visualize and manage exchanges, queues, message flow, and stream processors.
 
 ### Non-Functional Requirements
 - **Hybrid Storage**: Messages must be handled in-memory for speed but persisted to disk using SQLite for durability.
@@ -105,6 +109,73 @@ Check the logs to see the leader election:
 docker-compose logs -f | grep "LEADER"
 ```
 
+### Stream Queues & Processors
+
+#### Stream Queues
+
+STREAM queues are append-only logs where messages are never removed on read. Each consumer maintains its own independent offset, allowing multiple consumers to read the same stream at different positions. New consumers start from offset `0` (full history).
+
+To create a STREAM queue, set `queueType` to `STREAM` when creating the queue via the Management API.
+
+#### Stream Consumer API
+
+```bash
+# Poll the next unread message for a consumer
+GET /api/stream/{queue}?consumerId={id}
+```
+
+- Returns the next message at the consumer's current offset with an `X-Stream-Offset` header.
+- Returns `204 No Content` when the consumer has caught up to the end of the stream.
+- Offsets are replicated through Raft so they survive node failures.
+
+#### Stream Processors
+
+Stream processors are server-side pipelines that continuously read from a source STREAM queue, evaluate a filter expression on each message, and forward matching messages to a target exchange. They can optionally maintain stateful aggregations.
+
+**Processor API:**
+
+| Method | Path                          | Description                |
+|--------|-------------------------------|----------------------------|
+| POST   | `/api/processors`             | Create a processor         |
+| GET    | `/api/processors`             | List all processors        |
+| GET    | `/api/processors/{id}`        | Get a single processor     |
+| DELETE | `/api/processors/{id}`        | Delete a processor         |
+| POST   | `/api/processors/{id}/pause`  | Pause a processor          |
+| POST   | `/api/processors/{id}/resume` | Resume a processor         |
+| GET    | `/api/processors/{id}/state`  | Get aggregation state      |
+
+**Create Processor Example:**
+
+```json
+POST /api/processors
+{
+  "name": "order-filter",
+  "sourceQueue": "events-stream",
+  "targetExchange": "filtered-orders",
+  "targetRoutingKey": "orders",
+  "filterExpression": "payload.type == \"order\"",
+  "aggregationType": "COUNT",
+  "aggregationField": null,
+  "aggregationGroupBy": "type"
+}
+```
+
+**Filter Expressions:**
+
+Filter expressions follow the format `<path> <op> <value>` where:
+- **path**: `routingKey`, `exchange`, `queueName`, or a dot-separated JSON path (e.g., `payload.type`, `payload.order.amount`)
+- **op**: `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`
+- **value**: double-quoted string, number, or `true`/`false`
+
+A `null` or blank expression passes all messages.
+
+**Aggregation Types:**
+- `COUNT` — counts matching messages per group
+- `SUM` — sums a numeric field extracted via `aggregationField`
+- `LAST` — stores the last value of the field extracted via `aggregationField`
+
+Aggregation state is grouped by the JSON path specified in `aggregationGroupBy` (or a single `"global"` group if not set). State is replicated through Raft.
+
 ### 6. Management UI
 - [x] **Dashboard Development**: A comprehensive web-based management console to visualize and manage exchanges, queues, and message flow.
 - [x] **API Integration**: Real-time integration with Management, Metrics, and Cluster REST APIs.
@@ -113,6 +184,7 @@ docker-compose logs -f | grep "LEADER"
     - **Live Metrics**: Real-time stats for published, acked, nacked, and DLQ messages.
     - **Messaging Tools**: Built-in tools to publish messages and manually poll/ack messages from queues.
     - **Cluster Visualization**: View cluster nodes and manage membership (Join/Leave).
+    - **Stream Processors**: Create, monitor, pause/resume, and delete stream processing pipelines.
 
 ### 7. Testing & Quality Assurance
 - [x] **Unit Testing**: Test routing logic and individual component behavior.
@@ -187,6 +259,8 @@ graph TB
     subgraph API[REST API Layer]
         PR[PublishResource]
         POR[PollingResource]
+        SR[StreamResource]
+        PROC[ProcessorResource]
         MR[ManagementResource]
         CR[ClusterResource]
         LPF[LeaderProxyFilter]
@@ -195,6 +269,9 @@ graph TB
     subgraph SVC[Service Layer]
         ME[MessagingEngine]
         QS[QueueService]
+        PS[ProcessorService]
+        PEE[ProcessorExecutionEngine]
+        FE[FilterEvaluator]
         MetS[MetricsService]
     end
 
@@ -216,6 +293,8 @@ graph TB
 
     PR --> LPF
     POR --> LPF
+    SR --> LPF
+    PROC --> PS
     MR --> LPF
     CR --> RS
     LPF --> ME
@@ -225,9 +304,14 @@ graph TB
     ERE --> FAN
     ME --> RS
     QS --> RS
+    PS --> RS
+    PEE --> FE
+    PEE --> ME
+    PEE --> PS
     RS --> SM
     SM --> ME
     SM --> QS
+    SM --> PS
     SM --> SS
     SM --> PM
     ME --> MetS
@@ -347,6 +431,7 @@ erDiagram
     QUEUE {
         string name PK
         string queueGroup
+        string queueType
         bool durable
         bool autoDelete
     }
@@ -372,10 +457,38 @@ erDiagram
         int lastAppliedIndex
         int lastAppliedTerm
     }
+    STREAM_CONSUMER_OFFSET {
+        string id PK
+        string consumerId
+        string queueName
+        long nextOffset
+    }
+    STREAM_PROCESSOR {
+        string id PK
+        string name
+        string sourceQueue
+        string filterExpression
+        string targetExchange
+        string targetRoutingKey
+        string status
+        string aggregationType
+        string aggregationField
+        string aggregationGroupBy
+        datetime createdAt
+    }
+    STREAM_PROCESSOR_STATE {
+        string id PK
+        string processorId
+        string stateKey
+        string stateValue
+        datetime updatedAt
+    }
 
     EXCHANGE ||--o{ BINDING : "has"
     QUEUE ||--o{ BINDING : "has"
     QUEUE ||--o{ MESSAGE : "contains"
+    QUEUE ||--o{ STREAM_CONSUMER_OFFSET : "tracks"
+    STREAM_PROCESSOR ||--o{ STREAM_PROCESSOR_STATE : "aggregates"
 ```
 
 ### Message Lifecycle State Machine

@@ -1,11 +1,15 @@
 package io.dist.storage;
 
 import io.dist.model.Message;
+import io.dist.model.MessageStatus;
+import io.dist.model.Queue;
+import io.dist.model.QueueType;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import java.util.Comparator;
 import java.util.List;
 import org.jboss.logging.Logger;
 
@@ -69,15 +73,33 @@ public class PersistenceManager {
     @Transactional
     public void recoverMessages() {
         try {
-            List<Message> messages = Message.list("status != ?1 and status != ?2", io.dist.model.MessageStatus.ACKED, io.dist.model.MessageStatus.DLQ);
+            List<Message> messages = Message.list("status != ?1 and status != ?2", MessageStatus.ACKED, MessageStatus.DLQ);
             LOG.info("Found " + messages.size() + " messages in database for recovery.");
             for (Message message : messages) {
+                Queue queue = Queue.findById(message.queueName);
+                if (queue != null && queue.queueType == QueueType.STREAM) {
+                    // Stream messages are recovered separately below (ordered by offset)
+                    continue;
+                }
                 // Reset DELIVERED → PENDING since the consumer that held the message
                 // is no longer connected after a broker restart.
-                if (message.status == io.dist.model.MessageStatus.DELIVERED) {
-                    message.status = io.dist.model.MessageStatus.PENDING;
+                if (message.status == MessageStatus.DELIVERED) {
+                    message.status = MessageStatus.PENDING;
                 }
                 storageService.getBuffer(message.queueName).enqueue(message);
+            }
+
+            // Recover STREAM queue messages: reload into StreamBuffers ordered by stream_offset
+            List<Queue> streamQueues = Queue.list("queueType", QueueType.STREAM);
+            for (Queue streamQueue : streamQueues) {
+                List<Message> streamMessages = Message.list("queueName = ?1 and status != ?2 and status != ?3 and streamOffset is not null",
+                        streamQueue.name, MessageStatus.ACKED, MessageStatus.DLQ);
+                streamMessages.sort(Comparator.comparingLong(m -> m.streamOffset));
+                StreamBuffer buf = storageService.getStreamBuffer(streamQueue.name);
+                for (Message msg : streamMessages) {
+                    buf.recoverEnqueue(msg);
+                }
+                LOG.infof("Recovered %d messages into stream buffer for queue '%s'", streamMessages.size(), streamQueue.name);
             }
         } catch (Exception e) {
             LOG.error("Failed to recover messages from database", e);
