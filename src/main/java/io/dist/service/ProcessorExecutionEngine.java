@@ -148,7 +148,8 @@ public class ProcessorExecutionEngine {
 
     private String computeNewState(StreamProcessor p, Message msg, String currentStateJson) {
         try {
-            ObjectNode state = (ObjectNode) MAPPER.readTree(currentStateJson);
+            JsonNode parsed = (currentStateJson != null) ? MAPPER.readTree(currentStateJson) : null;
+            ObjectNode state = (parsed instanceof ObjectNode) ? (ObjectNode) parsed : null;
             if (state == null) {
                 state = MAPPER.createObjectNode();
                 state.put("count", 0);

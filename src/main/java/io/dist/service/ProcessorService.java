@@ -32,19 +32,35 @@ public class ProcessorService {
     // ======================== Replicated operations ========================
 
     public Uni<Void> createProcessor(StreamProcessor p) {
-        return raftService.replicateCreateProcessor(p).replaceWithVoid();
+        return raftService.replicateCreateProcessor(p)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate processor creation"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     public Uni<Void> pauseProcessor(String id) {
-        return raftService.replicatePauseProcessor(id).replaceWithVoid();
+        return raftService.replicatePauseProcessor(id)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate processor pause"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     public Uni<Void> resumeProcessor(String id) {
-        return raftService.replicateResumeProcessor(id).replaceWithVoid();
+        return raftService.replicateResumeProcessor(id)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate processor resume"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     public Uni<Void> deleteProcessor(String id) {
-        return raftService.replicateDeleteProcessor(id).replaceWithVoid();
+        return raftService.replicateDeleteProcessor(id)
+                .flatMap(success -> {
+                    if (!success) return Uni.createFrom().failure(new RuntimeException("Failed to replicate processor deletion"));
+                    return Uni.createFrom().voidItem();
+                });
     }
 
     // ======================== Local operations (called by state machine) ========================
